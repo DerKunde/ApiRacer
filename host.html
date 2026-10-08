@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ApiRacer · Host</title>
+  </head>
+  <body>
+    <main>
+      <h1>🖥️ ApiRacer Host</h1>
+
+      <section>
+        <p>Raumcode</p>
+        <p class="room-code" id="room-code">…</p>
+        <p>Auf dem Handy öffnen (gleiches WLAN):</p>
+        <ul id="join-links" class="links"></ul>
+      </section>
+
+      <section>
+        <h2>Verbundene Handys</h2>
+        <table>
+          <thead>
+            <tr><th>ID</th><th>Status</th><th>Verbindungsweg</th><th>Ping</th></tr>
+          </thead>
+          <tbody id="peers"></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Protokoll</h2>
+        <ol id="log" class="log"></ol>
+      </section>
+    </main>
+    <script type="module" src="/src/client/host.ts"></script>
+  </body>
+</html>

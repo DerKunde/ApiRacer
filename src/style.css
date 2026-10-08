@@ -1,0 +1,177 @@
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c1f24;
+  --muted: #5d6573;
+  --border: #d9dde3;
+  --accent: #2f6fde;
+  --flash: #fff1b8;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171b;
+    --surface: #1f2228;
+    --text: #e8eaee;
+    --muted: #9aa3b2;
+    --border: #343944;
+    --accent: #6a9cff;
+    --flash: #5a4a12;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+main {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px 16px 48px;
+}
+
+h1 {
+  margin-top: 0;
+}
+
+section {
+  margin-top: 24px;
+}
+
+a {
+  color: var(--accent);
+  word-break: break-all;
+}
+
+.choices {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.card span {
+  color: var(--muted);
+}
+
+.room-code {
+  margin: 0;
+  font-size: 3rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
+
+.links {
+  padding-left: 20px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+th,
+td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+tr.flash {
+  animation: flash 1s ease-out;
+}
+
+@keyframes flash {
+  from {
+    background: var(--flash);
+  }
+}
+
+.status {
+  font-size: 1.4rem;
+  font-weight: 600;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+}
+
+dt {
+  color: var(--muted);
+}
+
+dd {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button.big {
+  width: 100%;
+  padding: 18px;
+  font-size: 1.2rem;
+}
+
+.join-form {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.join-form input {
+  display: block;
+  font: inherit;
+  font-size: 1.5rem;
+  width: 6em;
+  padding: 6px 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+.log {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  font: 13px/1.6 ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  color: var(--muted);
+}

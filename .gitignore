@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets (z. B. TURN-Zugangsdaten)
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local certificates for HTTPS testing
+*.pem
+*.key
+*.crt
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
