@@ -13,7 +13,12 @@ import {
 } from './rtc';
 import { SignalingClient } from './signaling';
 import { byId, createLogger, hasWebRtcSupport } from './ui';
-import { requestOrientationEventPermission } from './orientation';
+import {
+  detectHolding,
+  requestOrientationEventPermission,
+  steeringAngle,
+  type DeviceHolding,
+} from './orientation';
 
 /** Controller = phone. Initiates the connection to the host PC (creates the offer and the DataChannel). */
 
@@ -24,12 +29,22 @@ const permissionButton = byId<HTMLButtonElement>('gyroPermissionButton');
 const alphaLabel = byId<HTMLElement>('orientation-alpha');
 const betaLabel = byId<HTMLElement>('orientation-beta');
 const gammaLabel = byId<HTMLElement>('orientation-gamma');
+const gravityLabel = byId<HTMLElement>('gravity');
+const holdingLabel = byId<HTMLElement>('device-holding');
+const steeringLabel = byId<HTMLElement>('steering');
+
+const HOLDING_TEXT: Record<DeviceHolding, string> = {
+  'portrait': 'Hochformat – bitte quer halten',
+  'landscape-primary': 'Quer (primary)',
+  'landscape-secondary': 'Quer (secondary)',
+};
 const enqueue = createQueue((err) => log(`❌ ${String(err)}`));
 
 let signaling: SignalingClient;
 let pc: RTCPeerConnection | undefined;
 let channel: RTCDataChannel | undefined;
 let helloCount = 0;
+let holding: DeviceHolding = 'portrait';
 
 function setStatus(text: string): void {
   statusEl.textContent = text;
@@ -55,6 +70,7 @@ permissionButton.addEventListener('click', async () => {
   log('Gyro permissions are ' + permissionResult);
   if(permissionResult === true){
     window.addEventListener("deviceorientation", handleOrientation);
+    window.addEventListener("devicemotion", handleMotion);
   }
   else{
     log('No gyro permission. You will play with 2D input. Which is not implemented yet. *sad noises*');
@@ -69,6 +85,18 @@ function handleOrientation(event: DeviceOrientationEvent){
   alphaLabel.textContent = alpha.toFixed(0);
   betaLabel.textContent = beta.toFixed(0);
   gammaLabel.textContent = gamma.toFixed(0);
+  steeringLabel.textContent = steeringAngle(beta, holding).toFixed(0) + '°';
+}
+
+// The gravity vector tells how the phone is held (independent of screen rotation and rotation lock)
+function handleMotion(event: DeviceMotionEvent){
+  const gravity = event.accelerationIncludingGravity;
+  if(!gravity || gravity.x === null || gravity.y === null){
+    return;
+  }
+  holding = detectHolding(gravity.x, gravity.y, holding);
+  gravityLabel.textContent = gravity.x.toFixed(1) + ' / ' + gravity.y.toFixed(1);
+  holdingLabel.textContent = HOLDING_TEXT[holding];
 }
 
 function handleServerMessage(msg: ServerMessage): void {

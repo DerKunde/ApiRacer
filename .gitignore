@@ -10,6 +10,9 @@ node_modules/
 dist/
 build/
 
+# Personal notes (not part of the repo)
+*.local.md
+
 # Logs
 *.log
 npm-debug.log*

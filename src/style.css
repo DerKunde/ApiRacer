@@ -51,26 +51,84 @@ a {
   word-break: break-all;
 }
 
-.choices {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-.card {
+/* Landing page: two large buttons, side by side when there is room (incl. phones in landscape) */
+.landing {
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 20px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  color: var(--text);
-  text-decoration: none;
+  justify-content: center;
+  gap: 24px;
+  text-align: center;
 }
 
-.card span {
+.landing h1 {
+  margin: 0;
+  font-size: clamp(2rem, 6vw, 3.5rem);
+}
+
+.landing header p {
+  margin: 4px 0 0;
   color: var(--muted);
+}
+
+.landing-actions {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.landing-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 28px 20px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.landing-button:hover,
+.landing-button:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.landing-button.primary {
+  border-color: var(--accent);
+}
+
+.landing-button strong {
+  font-size: 1.6rem;
+}
+
+.landing-button span {
+  color: var(--muted);
+}
+
+.landing-icon {
+  font-size: 2.5rem;
+  line-height: 1;
+}
+
+/* Phones in landscape have little height: tighten spacing */
+@media (orientation: landscape) and (max-height: 500px) {
+  .landing {
+    gap: 12px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+
+  .landing-button {
+    padding: 16px;
+  }
+
+  .landing-icon {
+    font-size: 1.8rem;
+  }
 }
 
 .room-code {

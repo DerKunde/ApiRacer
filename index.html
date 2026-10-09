@@ -7,17 +7,22 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <main>
-      <h1>🏁 ApiRacer</h1>
-      <p>Handy und PC direkt per WebRTC verbinden.</p>
-      <nav class="choices">
-        <a class="card" href="/host.html">
-          <strong>🖥️ Am PC</strong>
-          <span>Raum erstellen</span>
+    <main class="landing">
+      <header>
+        <h1>🏁 ApiRacer</h1>
+        <p>Dein Handy ist das Lenkrad.</p>
+      </header>
+
+      <nav class="landing-actions">
+        <a class="landing-button primary" href="/host.html">
+          <span class="landing-icon">🏟️</span>
+          <strong>Create Race</strong>
+          <span>Am PC: Rennen starten und Strecke anzeigen</span>
         </a>
-        <a class="card" href="/controller.html">
-          <strong>📱 Am Handy</strong>
-          <span>Mit Raumcode beitreten</span>
+        <a class="landing-button" href="/controller.html">
+          <span class="landing-icon">🎮</span>
+          <strong>Join Race</strong>
+          <span>Am Handy: mit Raumcode beitreten und lenken</span>
         </a>
       </nav>
     </main>
