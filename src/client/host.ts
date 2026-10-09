@@ -11,6 +11,7 @@ import {
 } from './rtc';
 import { SignalingClient } from './signaling';
 import { byId, createLogger, hasWebRtcSupport } from './ui';
+import QRCode from 'qrcode';
 
 /** Host = PC. Accepts an offer from every phone and keeps one PeerConnection per phone. */
 
@@ -27,6 +28,7 @@ interface Peer {
 
 const log = createLogger(byId('log'));
 const peersTable = byId<HTMLTableSectionElement>('peers');
+const qrCodeCanvas = byId<HTMLElement>('lobby-qr-code');
 const peers = new Map<PeerId, Peer>();
 let signaling: SignalingClient;
 
@@ -81,6 +83,7 @@ function showRoom(roomId: string, lanAddresses: string[]): void {
   links.replaceChildren(
     ...hosts.map((host) => {
       const url = `${location.protocol}//${host}:${location.port}/controller.html?room=${roomId}`;
+      createSessionQrCode(url);
       const item = document.createElement('li');
       const link = document.createElement('a');
       link.href = link.textContent = url;
@@ -169,6 +172,10 @@ function removePeer(id: PeerId): void {
   peer.row.remove();
   peers.delete(id);
   log(`[${id}] hat den Raum verlassen`);
+}
+
+function createSessionQrCode(lobbyURL: string){
+  QRCode.toCanvas(qrCodeCanvas, lobbyURL, {width: qrCodeCanvas.clientWidth, margin: 2});
 }
 
 main().catch((err: unknown) => log(`❌ ${String(err)}`));
