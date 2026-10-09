@@ -8,6 +8,8 @@ import { HOST_ID, type ClientMessage, type PeerId, type ServerMessage } from '..
  */
 
 const PORT = Number(process.env.PORT ?? 3001);
+// Set in the systemd unit on the VPS. LAN addresses are only needed when playing locally.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const ROOM_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I, O, 0, 1 (easily confused)
 
 interface Room {
@@ -64,7 +66,7 @@ function handleMessage(ws: WebSocket, msg: ClientMessage): void {
       const room: Room = { id: createRoomId(), host: ws, controllers: new Map(), nextPeerNumber: 1 };
       rooms.set(room.id, room);
       memberships.set(ws, { room, peerId: HOST_ID });
-      send(ws, { type: 'room-created', roomId: room.id, lanAddresses: lanAddresses() });
+      send(ws, { type: 'room-created', roomId: room.id, lanAddresses: IS_PRODUCTION ? undefined : lanAddresses() });
       console.log(`Raum ${room.id} erstellt`);
       return;
     }

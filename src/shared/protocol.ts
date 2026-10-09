@@ -41,7 +41,8 @@ export type ClientMessage =
 
 /** Server → Browser */
 export type ServerMessage =
-  | { type: 'room-created'; roomId: string; lanAddresses: string[] }
+  // lanAddresses: only sent by a local dev server, see server.ts
+  | { type: 'room-created'; roomId: string; lanAddresses?: string[] }
   | { type: 'joined'; roomId: string; peerId: PeerId }
   | { type: 'peer-joined'; peerId: PeerId }
   | { type: 'peer-left'; peerId: PeerId }

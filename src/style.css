@@ -140,7 +140,18 @@ a {
 }
 
 .links {
-  padding-left: 20px;
+  list-style: none;
+  padding-left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+/* One join option: QR code with the link below it */
+.links li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 table {

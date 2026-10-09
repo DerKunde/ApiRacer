@@ -1,10 +1,10 @@
 # Dependencies
 node_modules/
 
-# Environment / secrets (z. B. TURN-Zugangsdaten)
-.env
-.env.*
-!.env.example
+# Local overrides and secrets – never commit
+# (.env and .env.[mode] hold public build config and are committed, see Vite docs "Env Variables and Modes")
+.env.local
+.env.*.local
 
 # Build output
 dist/

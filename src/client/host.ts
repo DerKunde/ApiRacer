@@ -28,7 +28,7 @@ interface Peer {
 
 const log = createLogger(byId('log'));
 const peersTable = byId<HTMLTableSectionElement>('peers');
-const qrCodeCanvas = byId<HTMLElement>('lobby-qr-code');
+const QR_CODE_SIZE = 200;
 const peers = new Map<PeerId, Peer>();
 let signaling: SignalingClient;
 
@@ -46,7 +46,7 @@ async function main(): Promise<void> {
 function handleServerMessage(msg: ServerMessage): void {
   switch (msg.type) {
     case 'room-created':
-      showRoom(msg.roomId, msg.lanAddresses);
+      showRoom(msg.roomId, msg.lanAddresses ?? []);
       break;
     case 'peer-joined':
       addPeer(msg.peerId);
@@ -76,22 +76,50 @@ function handleServerMessage(msg: ServerMessage): void {
 
 function showRoom(roomId: string, lanAddresses: string[]): void {
   byId('room-code').textContent = roomId;
-  // Opened on "localhost" → offer the PC's LAN addresses to the phone instead
-  const isLocal = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
-  const hosts = isLocal ? lanAddresses : [location.hostname];
-  const links = byId('join-links');
-  links.replaceChildren(
-    ...hosts.map((host) => {
-      const url = `${location.protocol}//${host}:${location.port}/controller.html?room=${roomId}`;
-      createSessionQrCode(url);
-      const item = document.createElement('li');
-      const link = document.createElement('a');
-      link.href = link.textContent = url;
-      item.append(link);
-      return item;
-    }),
-  );
+
+  // Dev server opened on "localhost": the phone can't use that name → offer every LAN address instead.
+  // import.meta.env.DEV is replaced by `false` in the production build, so this branch is stripped there.
+  const urls =
+    import.meta.env.DEV && isOpenedOnLocalhost() ? buildLocalRoomURLs(roomId, lanAddresses) : [buildRoomURL(roomId)];
+
+  byId('join-links').replaceChildren(...urls.map(createJoinOption));
+  if (urls.length === 0) log('⚠️ Keine LAN-Adresse gefunden – ist der PC mit einem Netzwerk verbunden?');
   log(`Raum ${roomId} erstellt – warte auf Handys …`);
+}
+
+/** Production: the phone opens the controller under the same address as this page. */
+function buildRoomURL(roomId: string): string {
+  // URL keeps protocol and port of the current page and omits default ports (no "host:/…")
+  const url = new URL('/controller.html', location.origin);
+  url.searchParams.set('room', roomId);
+  return url.href;
+}
+
+/**
+ * Local dev: one URL per LAN address of the PC. The server can only list all interfaces
+ * (incl. virtual adapters like WSL/Hyper-V/VPN), so we offer all of them – at least one works.
+ */
+function buildLocalRoomURLs(roomId: string, lanAddresses: string[]): string[] {
+  return lanAddresses.map((address) => {
+    const url = new URL(buildRoomURL(roomId));
+    url.hostname = address;
+    return url.href;
+  });
+}
+
+function isOpenedOnLocalhost(): boolean {
+  return ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+}
+
+/** One way to join: QR code to scan with the phone, plus the link as text. */
+function createJoinOption(url: string): HTMLLIElement {
+  const item = document.createElement('li');
+  const canvas = document.createElement('canvas');
+  const link = document.createElement('a');
+  link.href = link.textContent = url;
+  item.append(canvas, link);
+  createSessionQrCode(canvas, url);
+  return item;
 }
 
 function addPeer(id: PeerId): void {
@@ -174,8 +202,11 @@ function removePeer(id: PeerId): void {
   log(`[${id}] hat den Raum verlassen`);
 }
 
-function createSessionQrCode(lobbyURL: string){
-  QRCode.toCanvas(qrCodeCanvas, lobbyURL, {width: qrCodeCanvas.clientWidth, margin: 2});
+// Fixed width: the canvas is not in the page yet, so it has no clientWidth to read
+function createSessionQrCode(canvas: HTMLCanvasElement, lobbyURL: string) {
+  QRCode.toCanvas(canvas, lobbyURL, { width: QR_CODE_SIZE, margin: 2 }).catch((err: unknown) =>
+    log(`❌ QR-Code konnte nicht erzeugt werden: ${String(err)}`),
+  );
 }
 
 main().catch((err: unknown) => log(`❌ ${String(err)}`));

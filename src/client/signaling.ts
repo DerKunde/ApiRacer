@@ -5,20 +5,25 @@ import type { ClientMessage, ServerMessage } from '../shared/protocol';
  * Only needed to set up the connection – afterwards everything runs over WebRTC.
  */
 export class SignalingClient {
-  private constructor(private readonly ws: WebSocket) {}
+  private constructor(private readonly ws: WebSocket) { }
 
   static connect(onMessage: (msg: ServerMessage) => void, onClose: () => void): Promise<SignalingClient> {
-    // Same host/port as the page – Vite proxies /ws to the signaling server
+
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+    const localFallbackURL = `${protocol}//${location.host}/ws`;
+
+    // Production: VITE_SIGNALING_URI is set at build time (deploy.yml) and points to the VPS.
+    // Locally it is unset. That means same host as the page, the Vite dev server proxies /ws to server.ts.
+    const url = import.meta.env.VITE_SIGNALING_URI ?? localFallbackURL;
+    const ws = new WebSocket(url);
 
     return new Promise((resolve, reject) => {
       ws.addEventListener('open', () => {
-        ws.addEventListener('message', (e) => onMessage(JSON.parse(e.data as string) as ServerMessage));
+        ws.addEventListener('message', (messageEvent) => onMessage(JSON.parse(messageEvent.data as string) as ServerMessage));
         ws.addEventListener('close', onClose);
         resolve(new SignalingClient(ws));
       }, { once: true });
-      ws.addEventListener('error', () => reject(new Error('Signaling-Server nicht erreichbar')), { once: true });
+      ws.addEventListener('error', () => reject(new Error('Signaling-Server nicht erreichbar!')), { once: true });
     });
   }
 
