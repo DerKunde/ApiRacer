@@ -46,6 +46,8 @@ export function createQueue(onError: (err: unknown) => void): (task: () => Promi
 
 /** Reads the candidate type from the SDP line, e.g. "candidate:… typ srflx …" → "srflx" */
 export function candidateType(candidate: string | undefined): string {
+  // Empty string = end-of-candidates indication (sent by Firefox before the final null event)
+  if (candidate === '') return 'Ende der Kandidaten';
   return candidate?.match(/ typ (\w+)/)?.[1] ?? '?';
 }
 
