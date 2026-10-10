@@ -12,7 +12,7 @@ export class SignalingClient {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const localFallbackURL = `${protocol}//${location.host}/ws`;
 
-    // Production: VITE_SIGNALING_URI is set at build time (deploy.yml) and points to the VPS.
+    // Production: VITE_SIGNALING_URI is read from .env.production at build time and points to the VPS.
     // Locally it is unset. That means same host as the page, the Vite dev server proxies /ws to server.ts.
     const url = import.meta.env.VITE_SIGNALING_URI ?? localFallbackURL;
     const ws = new WebSocket(url);

@@ -8,6 +8,9 @@ import { HOST_ID, type ClientMessage, type PeerId, type ServerMessage } from '..
  */
 
 const PORT = Number(process.env.PORT ?? 3001);
+// Loopback only: clients never connect directly, they always go through a reverse proxy
+// (Vite dev server locally, Caddy on the VPS).
+const HOST = '127.0.0.1';
 // Set in the systemd unit on the VPS. LAN addresses are only needed when playing locally.
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const ROOM_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I, O, 0, 1 (easily confused)
@@ -123,7 +126,7 @@ function handleClose(ws: WebSocket): void {
   }
 }
 
-const wss = new WebSocketServer({ port: PORT });
+const wss = new WebSocketServer({ host: HOST, port: PORT });
 
 wss.on('connection', (ws) => {
   ws.on('message', (raw) => {
@@ -139,4 +142,4 @@ wss.on('connection', (ws) => {
   ws.on('close', () => handleClose(ws));
 });
 
-console.log(`Signaling-Server läuft auf ws://localhost:${PORT}`);
+console.log(`Signaling-Server läuft auf ws://${HOST}:${PORT}`);
