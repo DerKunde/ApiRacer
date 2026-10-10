@@ -54,4 +54,8 @@ export type ServerMessage =
 export type ChannelMessage =
   | { type: 'ping'; t: number }
   | { type: 'pong'; t: number }
-  | { type: 'hello'; text: string };
+  | { type: 'hello'; text: string }
+  // message type related to user/client steering input.
+  // 'seq' counts up every message so late messages don't overrule newer ones, 'value' is the payload/steering input.
+  // (-1 = full left, +1 = full right).
+  | { type: 'steer'; seq: number; value: number };

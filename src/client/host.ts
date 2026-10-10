@@ -24,6 +24,8 @@ interface Peer {
   rttMs?: number;
   path?: string;
   pingTimer?: number;
+  steerSeq: number;
+  steerValue?: number;
 }
 
 const log = createLogger(byId('log'));
@@ -129,7 +131,8 @@ function addPeer(id: PeerId): void {
   row.insertCell();
   row.insertCell();
   row.insertCell();
-  const peer: Peer = { id, pc, row, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)) };
+  row.insertCell();
+  const peer: Peer = { id, pc, row, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), steerSeq: 0 };
   peers.set(id, peer);
   renderPeer(peer);
   log(`[${id}] beigetreten`);
@@ -175,6 +178,13 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
         void peer.row.offsetWidth; // restart the animation
         peer.row.classList.add('flash');
         break;
+      case 'steer':
+        if (msg.seq > peer.steerSeq) {
+          peer.steerSeq = msg.seq;
+          peer.steerValue = msg.value;
+          renderPeer(peer);
+        }
+        break;
     }
   };
 }
@@ -186,9 +196,10 @@ async function refreshPath(peer: Peer): Promise<void> {
 }
 
 function renderPeer(peer: Peer): void {
-  const [, state, path, rtt] = peer.row.cells;
+  const [, state, path, steerValue, rtt] = peer.row.cells;
   state.textContent = peer.pc.connectionState;
   path.textContent = peer.path ?? '–';
+  steerValue.textContent = peer.steerValue?.toFixed(2) ?? 'nA';
   rtt.textContent = peer.rttMs === undefined ? '–' : `${peer.rttMs.toFixed(1)} ms`;
 }
 

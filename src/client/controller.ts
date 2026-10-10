@@ -17,6 +17,7 @@ import {
   detectHolding,
   requestOrientationEventPermission,
   steeringAngle,
+  steeringValue,
   type DeviceHolding,
 } from './orientation';
 
@@ -38,6 +39,7 @@ const HOLDING_TEXT: Record<DeviceHolding, string> = {
   'landscape-primary': 'Quer (primary)',
   'landscape-secondary': 'Quer (secondary)',
 };
+const STEER_INTERVAL_MS = 1000 / 60;
 const enqueue = createQueue((err) => log(`❌ ${String(err)}`));
 
 let signaling: SignalingClient;
@@ -45,6 +47,9 @@ let pc: RTCPeerConnection | undefined;
 let channel: RTCDataChannel | undefined;
 let helloCount = 0;
 let holding: DeviceHolding = 'portrait';
+let steerValue = 0;
+let steerSeq = 0;
+let steerTimer: number | undefined;
 
 function setStatus(text: string): void {
   statusEl.textContent = text;
@@ -68,30 +73,31 @@ async function main(roomId: string): Promise<void> {
 permissionButton.addEventListener('click', async () => {
   const permissionResult = await requestOrientationEventPermission();
   log('Gyro permissions are ' + permissionResult);
-  if(permissionResult === true){
+  if (permissionResult === true) {
     window.addEventListener("deviceorientation", handleOrientation);
     window.addEventListener("devicemotion", handleMotion);
   }
-  else{
+  else {
     log('No gyro permission. You will play with 2D input. Which is not implemented yet. *sad noises*');
   }
 });
 
-function handleOrientation(event: DeviceOrientationEvent){
-  const {alpha, beta, gamma} = event;
-  if(alpha === null || beta === null || gamma === null){
+function handleOrientation(event: DeviceOrientationEvent) {
+  const { alpha, beta, gamma } = event;
+  if (alpha === null || beta === null || gamma === null) {
     return;
   }
   alphaLabel.textContent = alpha.toFixed(0);
   betaLabel.textContent = beta.toFixed(0);
   gammaLabel.textContent = gamma.toFixed(0);
-  steeringLabel.textContent = steeringAngle(beta, holding).toFixed(0) + '°';
+  steerValue = Math.round(steeringValue(steeringAngle(beta, holding)) * 100) / 100;
+  steeringLabel.textContent = steerValue.toFixed(2);
 }
 
 // The gravity vector tells how the phone is held (independent of screen rotation and rotation lock)
-function handleMotion(event: DeviceMotionEvent){
+function handleMotion(event: DeviceMotionEvent) {
   const gravity = event.accelerationIncludingGravity;
-  if(!gravity || gravity.x === null || gravity.y === null){
+  if (!gravity || gravity.x === null || gravity.y === null) {
     return;
   }
   holding = detectHolding(gravity.x, gravity.y, holding);
@@ -137,10 +143,14 @@ function startConnection(): void {
     helloButton.disabled = false;
     log('DataChannel offen');
     window.setInterval(() => void refreshPath(connection), 2000);
+    steerTimer = window.setInterval(() => {
+      sendMessage(channel, { type: 'steer', seq: ++steerSeq, value: steerValue });
+    }, STEER_INTERVAL_MS);
     void refreshPath(connection);
   };
   channel.onclose = () => {
     setStatus('Verbindung getrennt');
+    window.clearInterval(steerTimer);
     helloButton.disabled = true;
   };
   channel.onmessage = (e) => {

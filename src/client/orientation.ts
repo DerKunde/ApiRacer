@@ -10,6 +10,8 @@ const DOMINANCE_FACTOR = 1.5;
 const LEAVE_LANDSCAPE_FACTOR = 3;
 // Below this (m/s²) the phone lies too flat to tell how it is held
 const MIN_GRAVITY = 3;
+// Tilt degrees which count as full steering lock
+const MAX_STEERING_ANGLE = 45;
 
 /**
  * Determines how the phone is held from the gravity vector (accelerationIncludingGravity).
@@ -38,6 +40,12 @@ export function steeringAngle(beta: number, holding: DeviceHolding): number{
         return -beta;
     }
     return 0;
+}
+
+/** Maps a steering angle (degrees, from steeringAngle) to -1 (full left) .. +1 (full right), clamped at ±MAX_STEERING_ANGLE. */
+export function steeringValue(angle: number): number{
+    const clampedAngle = Math.min(Math.max(angle, -MAX_STEERING_ANGLE), MAX_STEERING_ANGLE);
+    return clampedAngle / MAX_STEERING_ANGLE;
 }
 
 export async function requestOrientationEventPermission(): Promise<boolean>{
