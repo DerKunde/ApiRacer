@@ -28,6 +28,16 @@ jobs:
           # The key is restricted to deploy/apiracer-deploy.sh on the VPS, the SHA is its only argument
           ssh relay@relay.messy-desk-studio.de "$SHA"
 
+      # Checks the whole path a browser uses (DNS, TLS, Caddy, server). Reports only, no rollback:
+      # failures here are not caused by the server code.
+      - name: Check signaling server from outside
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' https://relay.messy-desk-studio.de/ws || true)
+          if [ "$status" != 426 ]; then
+            echo "::error::Signaling server not reachable from outside: expected HTTP 426 from /ws, got $status"
+            exit 1
+          fi
+
   build-and-deploy:
     # Only ship a frontend if the server it talks to was deployed successfully
     needs: deploy-relay
