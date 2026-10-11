@@ -331,3 +331,13 @@ button.big {
 .api-permission {
   margin-top: 10px;
 }
+
+/* 3D view on the host: the renderer takes its size from this box, so it needs a fixed height */
+#orientation-view {
+  height: min(60vh, 480px);
+}
+
+/* Canvas is inline by default → small gap below it */
+#orientation-view canvas {
+  display: block;
+}

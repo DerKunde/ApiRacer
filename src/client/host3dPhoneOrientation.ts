@@ -13,6 +13,8 @@ import { SignalingClient } from './signaling';
 import { byId, createLogger, hasWebRtcSupport } from './ui';
 import type { Quaternion } from './mobileDeviceSensors';
 import QRCode from 'qrcode';
+import { ThreeOrientationView } from './threeOrientationView';
+import type { OrientationView } from './orientationView';
 
 /**
  * 3D demo host = PC. Shows one phone model per connected phone that mirrors its absolute rotation.
@@ -36,6 +38,8 @@ interface Peer {
 const log = createLogger(byId('log'));
 const peersTable = byId<HTMLTableSectionElement>('peers');
 const QR_CODE_SIZE = 200;
+const view: OrientationView = new ThreeOrientationView(byId('orientation-view'));
+
 // Page the phone opens via QR code / link
 const JOIN_PAGE = '/phone3dClient.html';
 const peers = new Map<PeerId, Peer>();
@@ -188,6 +192,7 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
           peer.orientationSeq = msg.seq;
           peer.quaternion = msg.quaternion;
           peer.absolute = msg.absolute;
+          view.updatePeer(peer.id, msg.quaternion);
           renderPeer(peer);
         }
         break;

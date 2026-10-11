@@ -31,6 +31,7 @@ import {
 const log = createLogger(byId('log'));
 const statusEl = byId('status');
 const permissionButton = byId<HTMLButtonElement>('gyroPermissionButton');
+const calibrateButton = byId<HTMLButtonElement>('calibrate-btn');
 const sourceLabel = byId<HTMLElement>('orientation-source');
 const eulerLabel = byId<HTMLElement>('orientation-euler');
 const compassLabel = byId<HTMLElement>('compass-heading');
@@ -60,6 +61,8 @@ let orientationSeq = 0;
 let source: OrientationSource = 'none';
 // iOS only: alphaAbs = alpha + compassOffset, null until the compass delivered a valid flat measurement
 let compassOffset: number | null = null;
+let yawZero = 0;
+let lastYaw = 0;
 
 function setStatus(text: string): void {
   statusEl.textContent = text;
@@ -101,6 +104,8 @@ permissionButton.addEventListener('click', async () => {
   }
 });
 
+calibrateButton.addEventListener('click', handleCalibration);
+
 /** Converts every sensor event into a quaternion and only stores it – the send timer picks it up. */
 function handleOrientation(event: DeviceOrientationEvent): void {
   const { alpha, beta, gamma } = event;
@@ -124,9 +129,14 @@ function handleOrientation(event: DeviceOrientationEvent): void {
   else {
     absolute = source === 'deviceorientationabsolute';
   }
-
-  quaternion = eulerToQuaternion(yaw, beta, gamma);
+  calibrateButton.disabled = source === 'webkit-compass' && !absolute;
+  lastYaw = yaw;
+  quaternion = eulerToQuaternion(yaw - yawZero, beta, gamma);
   quaternionLabel.textContent = quaternion.map((value) => value.toFixed(2)).join(' / ');
+}
+
+function handleCalibration(): void {
+  yawZero = lastYaw;
 }
 
 /** Rounds to 4 decimals – enough precision, shorter JSON */

@@ -112,8 +112,12 @@ export async function detectOrientationSource(timeoutMs: number): Promise<Orient
 
 // Max tilt (degrees) at which the compass heading still equals the direction of the top edge
 const MAX_FLAT_TILT = 30;
-// Share of a new measurement that flows into the offset – smooths the noisy magnetometer
-const COMPASS_SMOOTHING = 0.1;
+// Share of a new measurement that flows into the offset – smooths the noisy magnetometer.
+// 0 = offset frozen after the first valid measurement: continuous correction made the yaw jump 30–40°
+// when moving the phone (magnetic interference, accuracy only ±10–14°, see findings).
+// TODO: get more accurate compass values later (e.g. only correct while the phone lies still,
+// wait for a better webkitCompassAccuracy, or freeze the offset on "Ausrichten" instead).
+const COMPASS_SMOOTHING = 0;
 
 /** Normalizes an angle to 0 ≤ angle < 360 */
 function normalizeAngle(angle: number): number {
