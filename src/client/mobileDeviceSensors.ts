@@ -10,9 +10,9 @@ export interface WebKitDeviceOrientationEvent extends DeviceOrientationEvent {
     webkitCompassAccuracy?: number;
 }
 
-type OrientationSource =
-    'absolute-sensor'
-    | 'deviceorientationabsolute'
+/** Where the phone's rotation comes from, in order of preference (see detectOrientationSource) */
+export type OrientationSource =
+    'deviceorientationabsolute'
     | 'webkit-compass'
     | 'deviceorientation'
     | 'none';
@@ -79,8 +79,104 @@ export function waitForSensorEvent<K extends SensorEventType>(
     });
 }
 
+/**
+ * Picks the best working orientation source via feature detection (never via OS/user agent):
+ * 1. `deviceorientationabsolute` – absolute alpha (Chromium on Android)
+ * 2. `deviceorientation` with `webkitCompassHeading` – relative alpha + compass heading (iOS/WebKit)
+ * 3. `deviceorientation` – relative alpha only, yaw drifts / starts at an arbitrary direction
+ *
+ * Only call after the permission was granted, otherwise iOS delivers no events at all.
+ * Each step waits up to `timeoutMs` for an event with real values.
+ */
+export async function detectOrientationSource(timeoutMs: number): Promise<OrientationSource> {
+    // Skip the wait where the event doesn't exist at all (e.g. Safari)
+    if ('ondeviceorientationabsolute' in window) {
+        const absoluteEvent = await waitForSensorEvent('deviceorientationabsolute', timeoutMs, (event) => event.alpha !== null);
+        if (absoluteEvent) {
+            return 'deviceorientationabsolute';
+        }
+    }
+
+    // One wait covers steps 2 and 3: the compass heading arrives on the same event
+    const event = await waitForSensorEvent('deviceorientation', timeoutMs, (event) => event.alpha !== null);
+    if (!event) {
+        return 'none';
+    }
+    // Only check that the field exists: it is -1 while the compass is not calibrated yet,
+    // validity is checked per event later
+    if (typeof (event as WebKitDeviceOrientationEvent).webkitCompassHeading === 'number') {
+        return 'webkit-compass';
+    }
+    return 'deviceorientation';
+}
+
+// Max tilt (degrees) at which the compass heading still equals the direction of the top edge
+const MAX_FLAT_TILT = 30;
+// Share of a new measurement that flows into the offset – smooths the noisy magnetometer
+const COMPASS_SMOOTHING = 0.1;
+
+/** Normalizes an angle to 0 ≤ angle < 360 */
+function normalizeAngle(angle: number): number {
+    return ((angle % 360) + 360) % 360;
+}
+
+/** Shortest signed difference a − b in degrees (−180 ≤ result < 180), e.g. 1° − 359° = 2° */
+function angleDifference(a: number, b: number): number {
+    return normalizeAngle(a - b + 180) - 180;
+}
+
+/**
+ * iOS: offset (degrees) that turns the relative `alpha` into an absolute one: alphaAbs = alpha + offset.
+ * `webkitCompassHeading` counts clockwise, alpha counter-clockwise → offset = 360 − heading − alpha.
+ * Only measured while the phone lies roughly flat (only then the heading means "where the top edge points")
+ * and the compass reports a valid accuracy; otherwise `previous` is kept (null = no offset yet).
+ * New measurements are blended in gently, so the smooth gyro-based alpha stays smooth.
+ */
+export function updateCompassOffset(
+    alpha: number,
+    beta: number,
+    gamma: number,
+    heading: number,
+    accuracy: number,
+    previous: number | null,
+): number | null {
+    const isFlat = Math.abs(beta) < MAX_FLAT_TILT && Math.abs(gamma) < MAX_FLAT_TILT;
+    if (!isFlat || heading < 0 || accuracy < 0) {
+        return previous;
+    }
+    const measured = normalizeAngle(360 - heading - alpha);
+    if (previous === null) {
+        return measured;
+    }
+    return normalizeAngle(previous + angleDifference(measured, previous) * COMPASS_SMOOTHING);
+}
+
 /** Rotation as quaternion [x, y, z, w] (Generic Sensor API format) */
 export type Quaternion = [x: number, y: number, z: number, w: number];
+
+/**
+ * Converts deviceorientation angles (degrees) into a quaternion in the W3C earth frame
+ * (x east, y north, z up). The spec applies the rotations intrinsically in the order Z-X'-Y'':
+ * q = qZ(alpha) · qX(beta) · qY(gamma), with qAxis(θ) = [axis · sin(θ/2), cos(θ/2)].
+ * Below is that product multiplied out (same result as the spec's worked example).
+ */
+export function eulerToQuaternion(alpha: number, beta: number, gamma: number): Quaternion {
+    const toHalfRadians = Math.PI / 360;
+    const halfZ = alpha * toHalfRadians;
+    const halfX = beta * toHalfRadians;
+    const halfY = gamma * toHalfRadians;
+
+    const cZ = Math.cos(halfZ), sZ = Math.sin(halfZ);
+    const cX = Math.cos(halfX), sX = Math.sin(halfX);
+    const cY = Math.cos(halfY), sY = Math.sin(halfY);
+
+    return [
+        sX * cY * cZ - cX * sY * sZ,
+        cX * sY * cZ + sX * cY * sZ,
+        cX * cY * sZ + sX * sY * cZ,
+        cX * cY * cZ - sX * sY * sZ,
+    ];
+}
 
 // Generic Sensor API (Chromium only) – not part of TypeScript's DOM types, so declared here
 // with just the members we use.

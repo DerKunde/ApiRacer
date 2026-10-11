@@ -22,6 +22,8 @@ export default defineConfig(({ mode }) => ({
         host: page('./host.html'),
         controller: page('./controller.html'),
         sensors: page('./sensors.html'),
+        host3dPhoneOrientation: page('./host3dPhoneOrientation.html'),
+        phone3dClient: page('./phone3dClient.html'),
       },
     },
   },
