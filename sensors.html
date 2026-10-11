@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ApiRacer · Sensor-Check</title>
+  </head>
+  <body>
+    <main>
+      <h1>🔧 Sensor-Check</h1>
+      <p class="hint">Zeigt, welche Sensor-APIs dieses Gerät in diesem Browser anbietet und ob sie Daten liefern.</p>
+
+      <section>
+        <h2>Gerät</h2>
+        <dl>
+          <dt>Betriebssystem</dt><dd id="device-os">–</dd>
+          <dt>Browser</dt><dd id="device-browser">–</dd>
+          <dt>Sicherer Kontext</dt><dd id="device-secure-context">–</dd>
+          <dt>User-Agent</dt><dd id="device-user-agent" class="mono">–</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h2>APIs</h2>
+        <!-- One entry per API, cloned from #api-entry by the script -->
+        <ul id="api-list" class="api-list"></ul>
+      </section>
+
+      <section>
+        <h2>Protokoll</h2>
+        <ol id="log" class="log"></ol>
+      </section>
+    </main>
+
+    <!--
+      data-state on .api-state controls the badge color:
+      available | active | needs-permission | denied | missing | error
+    -->
+    <template id="api-entry">
+      <li class="api">
+        <div class="api-head">
+          <code class="api-name"></code>
+          <span class="api-state"></span>
+        </div>
+        <p class="api-detail"></p>
+        <button class="api-permission" type="button" hidden>Berechtigung anfragen</button>
+      </li>
+    </template>
+
+    <script type="module" src="/src/client/sensorCheck.ts"></script>
+  </body>
+</html>

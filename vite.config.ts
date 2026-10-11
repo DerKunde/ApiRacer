@@ -21,6 +21,7 @@ export default defineConfig(({ mode }) => ({
         main: page('./index.html'),
         host: page('./host.html'),
         controller: page('./controller.html'),
+        sensors: page('./sensors.html'),
       },
     },
   },
