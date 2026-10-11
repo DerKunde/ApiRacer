@@ -1,6 +1,7 @@
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 import { WebSocket, WebSocketServer } from 'ws';
-import { HOST_ID, type ClientMessage, type PeerId, type ServerMessage } from '../src/shared/protocol';
+import { HOST_ID, type ClientMessage, type IceServer, type PeerId, type ServerMessage } from '../src/shared/protocol';
+import { createHmac } from 'node:crypto';
 
 /**
  * Signaling server: only brokers the connection setup (offer/answer/ICE).
@@ -14,6 +15,10 @@ const HOST = '127.0.0.1';
 // Set in the systemd unit on the VPS. LAN addresses are only needed when playing locally.
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const ROOM_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I, O, 0, 1 (easily confused)
+
+const TURN_URLS = process.env.TURN_URLS?.split(',');
+const TURN_SECRET = process.env.TURN_SECRET;
+const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
 
 interface Room {
   id: string;
@@ -46,6 +51,26 @@ function createRoomId(): string {
   return id;
 }
 
+/**
+ * Creates the TURN entry for `peerId` with time-limited credentials
+ * (TURN REST API scheme, coturn `use-auth-secret`):
+ * - username: `"<expiry as unix seconds>:<peerId>"`
+ * - credential: `base64(HMAC-SHA1(secret, username))`
+ *
+ * coturn recomputes the HMAC with the same secret, so the secret itself never leaves the VPS.
+ *
+ * @returns `undefined` when TURN is not configured (local dev).
+ * @see https://github.com/coturn/coturn/wiki/turnserver#turn-rest-api
+ */
+function createTurnIceServer(peerId: PeerId): IceServer | undefined {
+  if (TURN_SECRET != undefined && TURN_URLS != undefined) {
+    const username = `${Math.floor((Date.now() / 1000)) + TURN_CREDENTIAL_TTL_S}:${peerId}`;
+    const credential = createHmac('sha1', TURN_SECRET).update(username).digest('base64');
+    return { urls: TURN_URLS, username, credential };
+  }
+  return undefined;
+}
+
 /** This machine's IPv4 addresses on the local network – the host builds the join link from them. */
 function lanAddresses(): string[] {
   return Object.values(networkInterfaces())
@@ -66,10 +91,11 @@ function handleMessage(ws: WebSocket, msg: ClientMessage): void {
   switch (msg.type) {
     case 'create-room': {
       if (membership) return send(ws, { type: 'error', message: 'Bereits in einem Raum' });
+      const turn = createTurnIceServer(HOST_ID);
       const room: Room = { id: createRoomId(), host: ws, controllers: new Map(), nextPeerNumber: 1 };
       rooms.set(room.id, room);
       memberships.set(ws, { room, peerId: HOST_ID });
-      send(ws, { type: 'room-created', roomId: room.id, lanAddresses: IS_PRODUCTION ? undefined : lanAddresses() });
+      send(ws, { type: 'room-created', roomId: room.id, lanAddresses: IS_PRODUCTION ? undefined : lanAddresses(), iceServers: turn ? [turn] : undefined });
       console.log(`Raum ${room.id} erstellt`);
       return;
     }
@@ -79,9 +105,10 @@ function handleMessage(ws: WebSocket, msg: ClientMessage): void {
       const room = rooms.get(String(msg.roomId).trim().toUpperCase());
       if (!room) return send(ws, { type: 'error', message: `Raum ${msg.roomId} nicht gefunden` });
       const peerId = `p${room.nextPeerNumber++}`;
+      const turn = createTurnIceServer(peerId);
       room.controllers.set(peerId, ws);
       memberships.set(ws, { room, peerId });
-      send(ws, { type: 'joined', roomId: room.id, peerId });
+      send(ws, { type: 'joined', roomId: room.id, peerId, iceServers: turn ? [turn] : undefined });
       send(room.host, { type: 'peer-joined', peerId });
       console.log(`[${room.id}] ${peerId} beigetreten`);
       return;

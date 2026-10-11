@@ -1,10 +1,6 @@
-import type { ChannelMessage, SignalData } from '../shared/protocol';
+import type { ChannelMessage, IceServer, SignalData } from '../shared/protocol';
 
-export const RTC_CONFIG: RTCConfiguration = {
-  // STUN tells each device its public address so hole punching through NAT can work.
-  // A TURN server (relay) will be added later as a fallback.
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-};
+const STUN_SERVER = 'stun:relay.messy-desk-studio.de:3478';
 
 export const CONTROL_CHANNEL_LABEL = 'control';
 
@@ -13,6 +9,28 @@ export const CONTROL_CHANNEL_LABEL = 'control';
  * because for real-time control only the latest value matters.
  */
 export const CONTROL_CHANNEL_OPTIONS: RTCDataChannelInit = { ordered: false, maxRetransmits: 0 };
+
+/**
+ * Builds the `RTCConfiguration` for a new `RTCPeerConnection` from the available ICE servers:
+ * - STUN (own coturn) is always included – tells each device its public address for hole punching.
+ * - TURN (same coturn) relays the traffic when no direct path works.
+ *
+ * `?relay=1` in the page URL (host or controller) sets `iceTransportPolicy: 'relay'`, i.e. only
+ * TURN relay candidates are allowed – forces the TURN path for the demo. Locally (no TURN) the
+ * connection then fails on purpose.
+ *
+ * @param iceServers TURN entries with time-limited credentials from the signaling server
+ *   (`room-created` / `joined`). Undefined locally.
+ * @see https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/RTCPeerConnection#configuration
+ */
+export function createRtcConfig(iceServers?: IceServer[]): RTCConfiguration {
+  const forceRelay = new URLSearchParams(location.search).get('relay') === '1';
+
+  return {
+    iceServers: [{ urls: STUN_SERVER }, ...(iceServers ?? [])],
+    iceTransportPolicy: forceRelay ? 'relay' : 'all',
+  };
+}
 
 export function sendMessage(channel: RTCDataChannel | undefined, msg: ChannelMessage): void {
   if (channel?.readyState === 'open') channel.send(JSON.stringify(msg));

@@ -21,6 +21,12 @@ export interface SessionDescription {
   sdp?: string;
 }
 
+export interface IceServer {
+  urls: string | string[];
+  username?: string;
+  credential?: string;
+}
+
 export interface IceCandidate {
   candidate?: string;
   sdpMid?: string | null;
@@ -42,8 +48,8 @@ export type ClientMessage =
 /** Server → Browser */
 export type ServerMessage =
   // lanAddresses: only sent by a local dev server, see server.ts
-  | { type: 'room-created'; roomId: string; lanAddresses?: string[] }
-  | { type: 'joined'; roomId: string; peerId: PeerId }
+  | { type: 'room-created'; roomId: string; lanAddresses?: string[]; iceServers?: IceServer[] }
+  | { type: 'joined'; roomId: string; peerId: PeerId; iceServers?: IceServer[] }
   | { type: 'peer-joined'; peerId: PeerId }
   | { type: 'peer-left'; peerId: PeerId }
   | { type: 'room-closed' }

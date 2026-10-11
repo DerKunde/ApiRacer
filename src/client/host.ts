@@ -1,12 +1,12 @@
 import '../style.css';
-import type { ChannelMessage, PeerId, ServerMessage } from '../shared/protocol';
+import type { ChannelMessage, IceServer, PeerId, ServerMessage } from '../shared/protocol';
 import {
   applySignal,
   candidateType,
   createQueue,
+  createRtcConfig,
   describePath,
   getConnectionPath,
-  RTC_CONFIG,
   sendMessage,
 } from './rtc';
 import { SignalingClient } from './signaling';
@@ -33,6 +33,7 @@ const peersTable = byId<HTMLTableSectionElement>('peers');
 const QR_CODE_SIZE = 200;
 const peers = new Map<PeerId, Peer>();
 let signaling: SignalingClient;
+let iceServers: IceServer[] | undefined;
 
 async function main(): Promise<void> {
   if (!hasWebRtcSupport()) {
@@ -48,6 +49,7 @@ async function main(): Promise<void> {
 function handleServerMessage(msg: ServerMessage): void {
   switch (msg.type) {
     case 'room-created':
+      iceServers = msg.iceServers;
       showRoom(msg.roomId, msg.lanAddresses ?? []);
       break;
     case 'peer-joined':
@@ -125,7 +127,7 @@ function createJoinOption(url: string): HTMLLIElement {
 }
 
 function addPeer(id: PeerId): void {
-  const pc = new RTCPeerConnection(RTC_CONFIG);
+  const pc = new RTCPeerConnection(createRtcConfig(iceServers));
   const row = peersTable.insertRow();
   row.insertCell().textContent = id;
   row.insertCell();

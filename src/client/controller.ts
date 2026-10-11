@@ -1,14 +1,14 @@
 import '../style.css';
-import { HOST_ID, type ChannelMessage, type ServerMessage } from '../shared/protocol';
+import { HOST_ID, type ChannelMessage, type ServerMessage, type IceServer } from '../shared/protocol';
 import {
   applySignal,
   candidateType,
   CONTROL_CHANNEL_LABEL,
   CONTROL_CHANNEL_OPTIONS,
   createQueue,
+  createRtcConfig,
   describePath,
   getConnectionPath,
-  RTC_CONFIG,
   sendMessage,
 } from './rtc';
 import { SignalingClient } from './signaling';
@@ -110,7 +110,7 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'joined':
       byId('peer-id').textContent = msg.peerId;
       log(`Raum beigetreten als ${msg.peerId}`);
-      startConnection();
+      startConnection(msg.iceServers);
       break;
     case 'signal': {
       const { data } = msg;
@@ -131,9 +131,9 @@ function handleServerMessage(msg: ServerMessage): void {
   }
 }
 
-function startConnection(): void {
+function startConnection(iceServers?: IceServer[]): void {
   setStatus('Baue WebRTC-Verbindung auf …');
-  const connection = new RTCPeerConnection(RTC_CONFIG);
+  const connection = new RTCPeerConnection(createRtcConfig(iceServers));
   pc = connection;
 
   // Create the DataChannel before the offer so it gets negotiated in the SDP
