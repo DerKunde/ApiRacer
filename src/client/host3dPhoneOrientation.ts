@@ -11,7 +11,7 @@ import {
 } from './rtc';
 import { SignalingClient } from './signaling';
 import { byId, createLogger, hasWebRtcSupport } from './ui';
-import type { Quaternion } from './mobileDeviceSensors';
+import { eulerToQuaternion, type Quaternion } from './mobileDeviceSensors';
 import QRCode from 'qrcode';
 import { ThreeOrientationView } from './threeOrientationView';
 import type { OrientationView } from './orientationView';
@@ -146,6 +146,7 @@ function addPeer(id: PeerId): void {
   const peer: Peer = { id, pc, row, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), orientationSeq: 0 };
   peers.set(id, peer);
   renderPeer(peer);
+  view.addPeer(id);
   log(`[${id}] beigetreten`);
 
   pc.onicecandidate = ({ candidate }) => {
@@ -221,6 +222,7 @@ function removePeer(id: PeerId): void {
   window.clearInterval(peer.pingTimer);
   peer.pc.close();
   peer.row.remove();
+  view.removePeer(id);
   peers.delete(id);
   log(`[${id}] hat den Raum verlassen`);
 }
@@ -231,5 +233,38 @@ function createSessionQrCode(canvas: HTMLCanvasElement, lobbyURL: string) {
     log(`❌ QR-Code konnte nicht erzeugt werden: ${String(err)}`),
   );
 }
+
+// Dev-only test buttons: add/remove fake phones without real controllers, to check grid layout and camera fit.
+// They only talk to the view – no WebRTC, no table row.
+function addTestButtons(): void {
+  const testIds: PeerId[] = [];
+  let nextTestId = 1;
+
+  const addButton = document.createElement('button');
+  addButton.textContent = '+ Test-Handy';
+  addButton.addEventListener('click', () => {
+    const id = `test-${nextTestId++}`;
+    testIds.push(id);
+    view.addPeer(id);
+    // Random rotation, so you can see whether tilted neighbors overlap
+    view.updatePeer(id, eulerToQuaternion(Math.random() * 360, Math.random() * 180 - 90, Math.random() * 180 - 90));
+  });
+
+  const removeButton = document.createElement('button');
+  removeButton.textContent = '− Test-Handy';
+  removeButton.addEventListener('click', () => {
+    // Removes a random one, so the re-layout after removing from the middle gets tested too
+    const [id] = testIds.splice(Math.floor(Math.random() * testIds.length), 1);
+    if (id != null) view.removePeer(id);
+  });
+
+  const testBar = document.createElement('p');
+  testBar.className = 'test-buttons';
+  testBar.append(addButton, removeButton);
+  byId('orientation-view').after(testBar);
+}
+
+// import.meta.env.DEV is replaced by `false` in the production build, so the test buttons are stripped there.
+if (import.meta.env.DEV) addTestButtons();
 
 main().catch((err: unknown) => log(`❌ ${String(err)}`));

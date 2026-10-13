@@ -332,9 +332,17 @@ button.big {
   margin-top: 10px;
 }
 
-/* 3D view on the host: the renderer takes its size from this box, so it needs a fixed height */
+/* 3D view on the host: the renderer takes its size from this box, so it needs a definite width and height.
+   Square, because the phones are laid out in a grid with 3 per row → fills the view from 7 phones on */
 #orientation-view {
-  height: min(60vh, 480px);
+  width: min(100%, 60vh, 480px);
+  aspect-ratio: 1;
+}
+
+/* Dev-only buttons below the 3D view (host3dPhoneOrientation.ts) */
+.test-buttons {
+  display: flex;
+  gap: 8px;
 }
 
 /* Canvas is inline by default → small gap below it */
