@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ApiRacer · 3D-Handy (Host)</title>
+  </head>
+  <body>
+    <main>
+      <h1>🖥️ ApiRacer 3D-Handy</h1>
+
+      <section>
+        <p>Raumcode</p>
+        <p class="room-code" id="room-code">…</p>
+        <p>Mit dem Handy scannen oder Link öffnen:</p>
+        <ul id="join-links" class="links"></ul>
+      </section>
+
+      <section>
+        <h2>Ansicht</h2>
+        <div id="orientation-view"></div>
+      </section>
+
+      <section>
+        <h2>Verbundene Handys</h2>
+        <table>
+          <thead>
+            <tr><th>ID</th><th>Status</th><th>Verbindungsweg</th><th>Quaternion</th><th>Absolut</th><th>Ping</th></tr>
+          </thead>
+          <tbody id="peers"></tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Protokoll</h2>
+        <ol id="log" class="log"></ol>
+      </section>
+    </main>
+    <script type="module" src="/src/client/host3dPhoneOrientation.ts"></script>
+  </body>
+</html>

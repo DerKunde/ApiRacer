@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ApiRacer · 3D-Handy</title>
+  </head>
+  <body>
+    <main>
+      <h1>📱 ApiRacer 3D-Handy</h1>
+
+      <button id="gyroPermissionButton">Device Gyro Permission</button>
+      <form id="join-form" class="join-form">
+        <label>
+          Raumcode
+          <input id="room-input" maxlength="4" autocapitalize="characters" autocomplete="off" required />
+        </label>
+        <button type="submit">Beitreten</button>
+      </form>
+
+      <section id="session" hidden>
+        <p class="status" id="status">…</p>
+        <dl>
+          <dt>Raum</dt><dd id="room">–</dd>
+          <dt>Peer-ID</dt><dd id="peer-id">–</dd>
+          <dt>Verbindungsweg</dt><dd id="path">–</dd>
+          <dt>Quelle</dt><dd id="orientation-source">–</dd>
+          <dt>Alpha / Beta / Gamma</dt><dd id="orientation-euler">–</dd>
+          <dt>Kompass (Genauigkeit)</dt><dd id="compass-heading">–</dd>
+          <dt>Quaternion</dt><dd id="orientation-quaternion">–</dd>
+        </dl>
+        <button id="calibrate-btn" class="big" disabled>🧭 Ausrichten</button>
+      </section>
+
+      <section>
+        <h2>Protokoll</h2>
+        <ol id="log" class="log"></ol>
+      </section>
+    </main>
+    <script type="module" src="/src/client/phone3dClient.ts"></script>
+  </body>
+</html>
