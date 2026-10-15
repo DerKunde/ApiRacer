@@ -276,6 +276,7 @@ function createPeerCard(id: PeerId, color: string): PeerCard {
   const path = addDetail('Weg');
   const absolute = addDetail('Absolut');
   const quaternion = addDetail('Quaternion');
+  quaternion.className = 'quaternion';
 
   root.append(head, details);
   peerList.append(root);

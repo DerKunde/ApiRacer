@@ -511,6 +511,13 @@ button.big {
   overflow-wrap: anywhere;
 }
 
+/* Quaternion always in one line. tabular-nums: all digits equally wide, so the line doesn't jitter
+   at 60 updates per second when e.g. a 1 becomes an 8 */
+.peer-card dd.quaternion {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (min-width: 1000px) {
   .dashboard {
     grid-template-columns: minmax(0, 1fr) 340px;
