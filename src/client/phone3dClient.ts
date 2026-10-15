@@ -40,7 +40,7 @@ const quaternionLabel = byId<HTMLElement>('orientation-quaternion');
 
 const SOURCE_TEXT: Record<OrientationSource, string> = {
   'deviceorientationabsolute': 'deviceorientationabsolute (absolut)',
-  'webkit-compass': 'webkit-compass (absolut, sobald der Kompass gültig ist)',
+  'webkit-compass': 'deviceorientation + webkitCompassHeading (absolut, sobald der Kompass gültig ist)',
   'deviceorientation': 'deviceorientation (relativ)',
   'none': 'keine – Gerät liefert keine Drehung',
 };
