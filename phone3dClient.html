@@ -7,32 +7,55 @@
   </head>
   <body>
     <main>
-      <h1>📱 ApiRacer 3D-Handy</h1>
+      <h1>3D-Handy Client</h1>
 
-      <button id="gyroPermissionButton">Device Gyro Permission</button>
-      <form id="join-form" class="join-form">
-        <label>
-          Raumcode
-          <input id="room-input" maxlength="4" autocapitalize="characters" autocomplete="off" required />
-        </label>
+      <!-- No visible label: the 4 underlines in the field show what goes in (style.css), aria-label names it for screen readers -->
+      <form id="join-form" class="join-row">
+        <input
+          id="room-input"
+          aria-label="Raumcode"
+          maxlength="4"
+          autocapitalize="characters"
+          autocomplete="off"
+          required
+        />
         <button type="submit">Beitreten</button>
       </form>
+      <!-- Hidden once a room is joined (main() in phone3dClient.ts) -->
+      <p class="hint" id="join-hint">Raumcode des Hosts eintragen oder QR-Code mit der Kamera scannen und Link öffnen.</p>
 
       <section id="session" hidden>
         <p class="status" id="status">…</p>
-        <dl>
-          <dt>Raum</dt><dd id="room">–</dd>
-          <dt>Peer-ID</dt><dd id="peer-id">–</dd>
-          <dt>Verbindungsweg</dt><dd id="path">–</dd>
-          <dt>Quelle</dt><dd id="orientation-source">–</dd>
-          <dt>Alpha / Beta / Gamma</dt><dd id="orientation-euler">–</dd>
-          <dt>Kompass (Genauigkeit)</dt><dd id="compass-heading">–</dd>
-          <dt>Quaternion</dt><dd id="orientation-quaternion">–</dd>
-        </dl>
-        <button id="calibrate-btn" class="big" disabled>🧭 Ausrichten</button>
+        <!-- Same card as for this phone on the host page (createPeerCard in host3dPhoneOrientation.ts) -->
+        <div class="peer-card">
+          <div class="peer-head">
+            <strong id="peer-id">–</strong>
+            <!-- "connected · 12.3 ms" – the ping span stays empty (and hidden) until the first pong -->
+            <span class="peer-status"><span id="connection-state">–</span><span class="peer-rtt" id="rtt"></span></span>
+          </div>
+          <div class="card-body">
+            <dl>
+              <dt>Weg</dt><dd id="path">–</dd>
+              <dt>Quelle</dt><dd id="orientation-source">–</dd>
+              <!-- Short labels: the longest label sets the label column width and leaves the rest for the values -->
+              <dt>α / β / γ</dt><dd id="orientation-euler">–</dd>
+              <dt>Kompass</dt><dd id="compass-heading">–</dd>
+              <dt>Quaternion</dt><dd id="orientation-quaternion" class="quaternion">–</dd>
+            </dl>
+            <!-- Covers the values until the sensors are allowed – without permission they stay empty anyway.
+                 iOS only shows the permission prompt after a tap, so this has to be a button. -->
+            <div class="sensor-overlay" id="sensor-overlay">
+              <button id="sensor-permission-btn">Bewegungssensoren freigeben</button>
+              <!-- Only shown when the permission was denied (phone3dClient.ts) -->
+              <p id="sensor-hint" hidden></p>
+            </div>
+          </div>
+        </div>
+        <button id="calibrate-btn" class="big" disabled>Ausrichten</button>
       </section>
 
-      <section>
+      <!-- Hidden until a room is joined (main() in phone3dClient.ts) – before that there's nothing to log -->
+      <section id="log-section" hidden>
         <h2>Protokoll</h2>
         <ol id="log" class="log"></ol>
       </section>

@@ -30,7 +30,7 @@ import {
 
 const log = createLogger(byId('log'));
 const statusEl = byId('status');
-const permissionButton = byId<HTMLButtonElement>('gyroPermissionButton');
+const permissionButton = byId<HTMLButtonElement>('sensor-permission-btn');
 const calibrateButton = byId<HTMLButtonElement>('calibrate-btn');
 const sourceLabel = byId<HTMLElement>('orientation-source');
 const eulerLabel = byId<HTMLElement>('orientation-euler');
@@ -64,16 +64,23 @@ let compassOffset: number | null = null;
 let yawZero = 0;
 let lastYaw = 0;
 
-function setStatus(text: string): void {
+/**
+ * state picks the icon in front of the text (.status[data-state] in style.css):
+ * 'connected' → link, 'disconnected' → link_off, none → no icon (while connecting).
+ */
+function setStatus(text: string, state?: 'connected' | 'disconnected'): void {
   statusEl.textContent = text;
+  if (state) statusEl.dataset.state = state;
+  else delete statusEl.dataset.state;
 }
 
 async function main(roomId: string): Promise<void> {
   byId('session').hidden = false;
-  byId('room').textContent = roomId;
+  byId('log-section').hidden = false;
+  byId('join-hint').hidden = true;
 
   if (!hasWebRtcSupport()) {
-    setStatus('❌ Kein WebRTC verfügbar');
+    setStatus('Kein WebRTC verfügbar', 'disconnected');
     log('RTCPeerConnection fehlt – evtl. ist HTTPS nötig (npm run dev:https)');
     return;
   }
@@ -88,9 +95,15 @@ permissionButton.addEventListener('click', async () => {
   log('Gyro permissions are ' + permissionResult);
   if (!permissionResult) {
     log('Keine Sensor-Berechtigung – ohne sie gibt es keine Drehung.');
+    // Overlay stays. Safari answers every further request with 'denied' (findings: "Once denied") until the tab
+    // is closed → tell the user how to retry
+    const hint = byId('sensor-hint');
+    hint.textContent = 'Zugriff verweigert – Tab schließen, Link neu öffnen und „Erlauben" wählen.';
+    hint.hidden = false;
     return;
   }
-  permissionButton.disabled = true;
+  // Permission granted → reveal the values below the overlay
+  byId('sensor-overlay').hidden = true;
   sourceLabel.textContent = 'suche …';
   source = await detectOrientationSource(SOURCE_TIMEOUT_MS);
   sourceLabel.textContent = SOURCE_TEXT[source];
@@ -149,7 +162,7 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'joined':
       byId('peer-id').textContent = msg.peerId;
       log(`Raum beigetreten als ${msg.peerId}`);
-      startConnection(msg.iceServers);
+      startConnection(msg.roomId, msg.iceServers);
       break;
     case 'signal': {
       const { data } = msg;
@@ -160,16 +173,16 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case 'room-closed':
-      setStatus('Host hat den Raum geschlossen');
+      setStatus('Host hat den Raum geschlossen', 'disconnected');
       pc?.close();
       break;
     case 'error':
-      setStatus(`❌ ${msg.message}`);
+      setStatus(msg.message, 'disconnected');
       break;
   }
 }
 
-function startConnection(iceServers?: IceServer[]): void {
+function startConnection(roomId: string, iceServers?: IceServer[]): void {
   setStatus('Baue WebRTC-Verbindung auf …');
   const connection = new RTCPeerConnection(createRtcConfig(iceServers));
   pc = connection;
@@ -177,9 +190,13 @@ function startConnection(iceServers?: IceServer[]): void {
   // Create the DataChannel before the offer so it gets negotiated in the SDP
   channel = connection.createDataChannel(CONTROL_CHANNEL_LABEL, CONTROL_CHANNEL_OPTIONS);
   channel.onopen = () => {
-    setStatus('✅ Verbunden (Peer-to-Peer)');
+    setStatus(`Verbunden mit ${roomId}`, 'connected');
     log('DataChannel offen');
-    pathTimer = window.setInterval(() => void refreshPath(connection), 2000);
+    // Once per second, like the host: refresh the path and measure the round-trip time (answered by the host's pong)
+    pathTimer = window.setInterval(() => {
+      void refreshPath(connection);
+      sendMessage(channel, { type: 'ping', t: performance.now() });
+    }, 1000);
     // Fixed rate instead of sending from the sensor handler: sensor events arrive irregularly
     sendTimer = window.setInterval(() => {
       if (!quaternion) return;
@@ -188,13 +205,15 @@ function startConnection(iceServers?: IceServer[]): void {
     void refreshPath(connection);
   };
   channel.onclose = () => {
-    setStatus('Verbindung getrennt');
+    setStatus('Verbindung getrennt', 'disconnected');
     window.clearInterval(pathTimer);
     window.clearInterval(sendTimer);
   };
   channel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
     if (msg.type === 'ping') sendMessage(channel, { type: 'pong', t: msg.t });
+    // msg.t is our own timestamp from the ping → same clock, so the difference is the round-trip time
+    if (msg.type === 'pong') byId('rtt').textContent = `${(performance.now() - msg.t).toFixed(1)} ms`;
   };
 
   connection.onicecandidate = ({ candidate }) => {
@@ -202,7 +221,11 @@ function startConnection(iceServers?: IceServer[]): void {
     signaling.send({ type: 'signal', to: HOST_ID, data: { kind: 'candidate', candidate: candidate.toJSON() } });
     log(`eigener ICE-Kandidat gesendet (${candidate.type ?? candidateType(candidate.candidate)})`);
   };
-  connection.onconnectionstatechange = () => log(`Verbindungsstatus: ${connection.connectionState}`);
+  connection.onconnectionstatechange = () => {
+    log(`Verbindungsstatus: ${connection.connectionState}`);
+    // Card header shows the same state as this phone's card on the host
+    byId('connection-state').textContent = connection.connectionState;
+  };
 
   enqueue(async () => {
     await connection.setLocalDescription(); // creates the offer
@@ -220,19 +243,21 @@ async function refreshPath(connection: RTCPeerConnection): Promise<void> {
   byId('path').textContent = path ? describePath(path) : '–';
 }
 
+const roomInput = byId<HTMLInputElement>('room-input');
+// Join form is always visible: enter a code manually, or switch to another room after joining via QR code.
+// Submitting reloads the page with ?room=… → the same path as opening a QR link.
+byId<HTMLFormElement>('join-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const code = roomInput.value.trim().toUpperCase();
+  if (code) location.search = `?room=${encodeURIComponent(code)}`;
+});
+
 const roomId = new URLSearchParams(location.search).get('room')?.trim().toUpperCase();
 if (roomId) {
+  // Opened via QR code / link: show the code in the field
+  roomInput.value = roomId;
   main(roomId).catch((err: unknown) => {
-    setStatus('❌ Verbindung fehlgeschlagen');
+    setStatus('Verbindung fehlgeschlagen', 'disconnected');
     log(String(err));
-  });
-} else {
-  // No room code in the URL: let the user enter it manually
-  const form = byId<HTMLFormElement>('join-form');
-  form.hidden = false;
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const code = byId<HTMLInputElement>('room-input').value.trim().toUpperCase();
-    if (code) location.search = `?room=${encodeURIComponent(code)}`;
   });
 }

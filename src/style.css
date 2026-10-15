@@ -216,6 +216,34 @@ tr.flash {
   font-weight: 600;
 }
 
+/* Phone page: icon in front of the status text, set via data-state (setStatus in phone3dClient.ts).
+   Material Symbols "link" / "link_off" as mask like the eye icon on the host – colored by background-color.
+   1.2em ≈ the text height; flex keeps icon and text vertically centered. */
+.status[data-state] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status[data-state]::before {
+  content: '';
+  flex-shrink: 0;
+  width: 1.2em;
+  height: 1.2em;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+
+.status[data-state='connected']::before {
+  --icon: url('./icons/link.svg');
+  background-color: var(--ok);
+}
+
+.status[data-state='disconnected']::before {
+  --icon: url('./icons/link_off.svg');
+  background-color: var(--error);
+}
+
 dl {
   display: grid;
   grid-template-columns: max-content 1fr;
@@ -266,6 +294,39 @@ button.big {
   padding: 6px 10px;
   text-transform: uppercase;
   letter-spacing: 0.2em;
+}
+
+/* 3D phone page: room code field and join button in one row, same height (stretch) */
+.join-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+/* Field exactly 4 characters wide with one underline per character → shows that a 4-letter code goes in.
+   Monospace, so every letter is 1ch wide: one cell = 1ch letter + --gap letter-spacing, and the underlines
+   (repeating gradient: 1ch line, --gap transparent) sit exactly below the letters. */
+.join-row input {
+  --gap: 0.5em;
+  --pad: 14px;
+  flex: none;
+  /* letter-spacing also follows the 4th letter → subtract it from the right padding, so both sides look equal.
+     Width: 4 cells + padding + 1px border each side (box-sizing: border-box) + 2px room for the text caret,
+     without it the field scrolls the text by a pixel after the 4th letter. */
+  padding: 8px calc(var(--pad) - var(--gap)) 8px var(--pad);
+  width: calc(4 * (1ch + var(--gap)) + 2 * var(--pad) - var(--gap) + 2px + 2px);
+  font: 700 1.5rem/1.2 ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  text-transform: uppercase;
+  letter-spacing: var(--gap);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  /* Underlines in the content box (= where the letters are), card color below. Size = exactly 4 cells, not 100%:
+     the content box is 2px wider (caret room), and 100% would draw the first 2px of a 5th underline. */
+  background:
+    repeating-linear-gradient(90deg, var(--muted) 0 1ch, transparent 1ch calc(1ch + var(--gap)))
+      left bottom / calc(4 * (1ch + var(--gap))) 2px no-repeat content-box,
+    var(--surface);
 }
 
 .log {
@@ -472,13 +533,54 @@ button.big {
   color: var(--muted);
 }
 
-/* --peer-color is set per card in createPeerCard – the same color as the phone's screen in the 3D view */
+/* Used on the host (one card per phone) and on the phone page (its own card).
+   --peer-color is set per card in createPeerCard – the same color as the phone's screen in the 3D view;
+   the phone page doesn't know its color → plain border */
 .peer-card {
   padding: 10px 14px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-left: 6px solid var(--peer-color, var(--border));
   border-radius: 12px;
+}
+
+/* Phone page: space to the calibrate button below, which has no margin of its own */
+#session > .peer-card {
+  margin-bottom: 16px;
+}
+
+/* Phone page: the card body is the positioning box for the permission overlay – the header stays uncovered */
+.card-body {
+  position: relative;
+}
+
+/* Call to action over the (still empty) sensor values: blurs them, button + hint centered on top.
+   Slightly larger than the body (negative inset) so it reaches the card's inner edges. */
+.sensor-overlay {
+  position: absolute;
+  inset: 0 -8px -6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  text-align: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* display: flex above would beat the hidden attribute's display: none */
+.sensor-overlay[hidden] {
+  display: none;
+}
+
+.sensor-overlay p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .peer-head {
