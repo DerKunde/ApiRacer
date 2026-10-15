@@ -65,4 +65,5 @@ export type ChannelMessage =
   // 'seq' counts up every message so late messages don't overrule newer ones, 'value' is the payload/steering input.
   // (-1 = full left, +1 = full right).
   | { type: 'steer'; seq: number; value: number }
-  | { type: 'orientation'; seq: number; quaternion: [x: number, y: number, z: number, w: number]; absolute: boolean };
+  | { type: 'orientation'; seq: number; quaternion: [x: number, y: number, z: number, w: number]; absolute: boolean }
+  | { type: 'peer-color'; color: string };

@@ -27,6 +27,7 @@ interface Peer {
   channel?: RTCDataChannel;
   enqueue: (task: () => Promise<void>) => void;
   card: PeerCard;
+  color: string;
   rttMs?: number;
   path?: string;
   pingTimer?: number;
@@ -170,7 +171,7 @@ function addPeer(id: PeerId): void {
   // Same color for the phone model and its card, so you can tell which card belongs to which phone
   const color = nextPeerColor();
   const card = createPeerCard(id, color);
-  const peer: Peer = { id, pc, card, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), orientationSeq: 0 };
+  const peer: Peer = { id, pc, card, color, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), orientationSeq: 0 };
   peers.set(id, peer);
   renderPeer(peer);
   view.addPeer(id, color);
@@ -196,6 +197,9 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
     log(`[${peer.id}] ✅ DataChannel offen – ab jetzt direkt Peer-to-Peer`);
     peer.pingTimer = window.setInterval(() => {
       sendMessage(channel, { type: 'ping', t: performance.now() });
+      // Send the peer color to the phone, currently happens also on every ping (1 s) – could be optimized to only send it once after the channel opens.
+      // That would need an additional DataChannel which is reliable and ordered, otherwise the color could be dropped.
+      sendMessage(channel, { type: 'peer-color', color: peer.color });
       void refreshPath(peer);
     }, 1000);
   };

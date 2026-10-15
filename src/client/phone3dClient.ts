@@ -270,6 +270,7 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
     if (msg.type === 'ping') sendMessage(channel, { type: 'pong', t: msg.t });
     // msg.t is our own timestamp from the ping → same clock, so the difference is the round-trip time
     if (msg.type === 'pong') byId('rtt').textContent = `${(performance.now() - msg.t).toFixed(1)} ms`;
+    if (msg.type === 'peer-color') byId('peer-card').style.setProperty('--peer-color', msg.color);
   };
 
   connection.onicecandidate = ({ candidate }) => {
