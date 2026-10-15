@@ -1,6 +1,6 @@
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 import { WebSocket, WebSocketServer } from 'ws';
-import { HOST_ID, type ClientMessage, type IceServer, type PeerId, type ServerMessage } from '../src/shared/protocol';
+import { HOST_ID, type ClientMessage, type IceServer, type PeerId, type ServerMessage, type SignalData } from '../src/shared/protocol';
 import { createHmac } from 'node:crypto';
 
 /**
@@ -16,6 +16,7 @@ const HOST = '127.0.0.1';
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const ROOM_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I, O, 0, 1 (easily confused)
 
+const ALLOWED_ORIGIN = 'https://stud.messy-desk-studio.de';
 const TURN_URLS = process.env.TURN_URLS?.split(',');
 const TURN_SECRET = process.env.TURN_SECRET;
 const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
@@ -153,19 +154,65 @@ function handleClose(ws: WebSocket): void {
   }
 }
 
-const wss = new WebSocketServer({ host: HOST, port: PORT });
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isSignalData(value: unknown): value is SignalData {
+  if (!isObject(value)) return false;
+  switch(value.kind) {
+    case 'description': 
+      return isObject(value.description)
+      && ['offer', 'answer', 'pranswer', 'rollback'].includes(value.description.type as string)
+      && (value.description.sdp === undefined || typeof value.description.sdp === 'string');
+    case 'candidate':
+      return isObject(value.candidate)
+    default: return false;
+  }
+}
+function isClientMessage(value: unknown): value is ClientMessage {
+  if (typeof value !== 'object' || value == null) {
+    return false;
+  }
+
+  const msg = value as ClientMessage;
+  switch (msg.type) {
+    case 'create-room': return true;
+    case 'join-room': return typeof msg.roomId === 'string';
+    case 'signal': return typeof msg.to === 'string' && isSignalData(msg.data);
+    default: return false;
+  }
+}
+
+const wss = new WebSocketServer({
+  host: HOST,
+  port: PORT,
+  maxPayload: 64 * 1024,
+  verifyClient: ({ origin }: { origin: string }) => !IS_PRODUCTION || origin === ALLOWED_ORIGIN,
+});
 
 wss.on('connection', (ws) => {
   ws.on('message', (raw) => {
-    let msg: ClientMessage;
+    let parsed: unknown;
     try {
-      msg = JSON.parse(raw.toString()) as ClientMessage;
+      parsed = JSON.parse(raw.toString());
     } catch {
       send(ws, { type: 'error', message: 'Ungültige Nachricht' });
       return;
     }
-    handleMessage(ws, msg);
+    if(!isClientMessage(parsed)) {
+      send(ws, { type: 'error', message: 'Ungültige Nachricht' });
+      return;
+    }
+    // Safety net for bugs in handleMessage: one bad message must not take down every room
+    try {
+      handleMessage(ws, parsed);
+    } catch (error) {
+      console.error('Fehler beim Verarbeiten der Nachricht:', error);
+      send(ws, { type: 'error', message: 'Fehler beim Verarbeiten der Nachricht' });
+    }
   });
+  ws.on('error', (error) => console.error('WebSocket-Fehler:', error.message));
   ws.on('close', () => handleClose(ws));
 });
 
