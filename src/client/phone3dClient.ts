@@ -16,6 +16,7 @@ import { byId, createLogger, hasWebRtcSupport } from './ui';
 import {
   detectOrientationSource,
   eulerToQuaternion,
+  needsOrientationPermission,
   requestOrientationEventPermission,
   updateCompassOffset,
   type OrientationSource,
@@ -88,6 +89,9 @@ function setStatus(text: string, state?: 'connected' | 'disconnected'): void {
 async function main(roomId: string): Promise<void> {
   byId('session').hidden = false;
   byId('join-hint').hidden = true;
+  // Not awaited: the sensor check (1–2 s) runs in parallel to the connection setup, usually done before the
+  // card appears. Independent of WebRTC, so it starts before the WebRTC check below.
+  void initOrientation();
 
   if (!hasWebRtcSupport()) {
     setStatus('Kein WebRTC verfügbar', 'disconnected');
@@ -100,31 +104,71 @@ async function main(roomId: string): Promise<void> {
   signaling.send({ type: 'join-room', roomId });
 }
 
-permissionButton.addEventListener('click', async () => {
-  const permissionResult = await requestOrientationEventPermission();
-  log('Gyro permissions are ' + permissionResult);
-  if (!permissionResult) {
-    log('Keine Sensor-Berechtigung – ohne sie gibt es keine Drehung.');
-    // Overlay stays. Safari answers every further request with 'denied' (findings: "Once denied") until the tab
-    // is closed → tell the user how to retry
-    const hint = byId('sensor-hint');
-    hint.textContent = 'Zugriff verweigert – Tab schließen, Link neu öffnen und „Erlauben" wählen.';
-    hint.hidden = false;
+/** Text below the button in the sensor overlay; empty text hides it. */
+function setSensorHint(text: string): void {
+  const hint = byId('sensor-hint');
+  hint.textContent = text;
+  hint.hidden = text === '';
+}
+
+/**
+ * Runs once per session (from main), without a tap. Asks "do sensor events arrive?" instead of "is there a
+ * permission?" – Safari has no way to read the permission state without prompting, and Android needs none.
+ * Events arriving = permission is there, whatever the reason (Android, or iOS already allowed earlier).
+ */
+async function initOrientation(): Promise<void> {
+  const detected = await detectOrientationSource(SOURCE_TIMEOUT_MS);
+  if (detected !== 'none') {
+    startOrientation(detected);
     return;
   }
-  // Permission granted → reveal the values below the overlay
-  byId('sensor-overlay').hidden = true;
-  sourceLabel.textContent = 'suche …';
-  source = await detectOrientationSource(SOURCE_TIMEOUT_MS);
+  if (needsOrientationPermission()) {
+    // iOS without permission yet: now the tap is needed (requestPermission only works inside a user gesture)
+    permissionButton.disabled = false;
+    setSensorHint('');
+    return;
+  }
+  // No events and no permission to ask for: the device has no motion sensors (e.g. laptop)
+  permissionButton.hidden = true;
+  sourceLabel.textContent = SOURCE_TEXT.none;
+  setSensorHint('Keine Bewegungssensoren gefunden – dieses Gerät liefert keine Drehung.');
+  log('Keine Bewegungssensoren gefunden');
+}
+
+/** Sensors deliver data: reveal the values under the overlay and listen to the detected event. */
+function startOrientation(detected: Exclude<OrientationSource, 'none'>): void {
+  source = detected;
   sourceLabel.textContent = SOURCE_TEXT[source];
   log(`Orientierungsquelle: ${source}`);
+  byId('sensor-overlay').hidden = true;
 
   if (source === 'deviceorientationabsolute') {
     window.addEventListener('deviceorientationabsolute', handleOrientation);
   }
-  else if (source !== 'none') {
+  else {
     window.addEventListener('deviceorientation', handleOrientation);
   }
+}
+
+permissionButton.addEventListener('click', async () => {
+  const permissionResult = await requestOrientationEventPermission();
+  log(`Sensor-Berechtigung: ${permissionResult ? 'erteilt' : 'verweigert'}`);
+  if (!permissionResult) {
+    // Overlay stays. Safari answers every further request with 'denied' (findings: "Once denied") until the tab
+    // is closed → tell the user how to retry
+    setSensorHint('Zugriff verweigert – Tab schließen, Link neu öffnen und „Erlauben" wählen.');
+    return;
+  }
+  permissionButton.disabled = true;
+  setSensorHint('Suche Sensoren …');
+  const detected = await detectOrientationSource(SOURCE_TIMEOUT_MS);
+  if (detected === 'none') {
+    // Allowed, but still no events – rare, but then a retry is the only option
+    permissionButton.disabled = false;
+    setSensorHint('Keine Sensordaten erhalten – bitte erneut versuchen.');
+    return;
+  }
+  startOrientation(detected);
 });
 
 calibrateButton.addEventListener('click', handleCalibration);

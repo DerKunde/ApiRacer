@@ -48,9 +48,10 @@
             <!-- Covers the values until the sensors are allowed – without permission they stay empty anyway.
                  iOS only shows the permission prompt after a tap, so this has to be a button. -->
             <div class="sensor-overlay" id="sensor-overlay">
-              <button id="sensor-permission-btn">Bewegungssensoren freigeben</button>
-              <!-- Only shown when the permission was denied (phone3dClient.ts) -->
-              <p id="sensor-hint" hidden></p>
+              <!-- Start state while initOrientation() checks whether sensor events already arrive (phone3dClient.ts):
+                   sensors running → overlay hidden; iOS without permission → button enabled; no sensors → hint only -->
+              <button id="sensor-permission-btn" disabled>Bewegungssensoren freigeben</button>
+              <p id="sensor-hint">Suche Sensoren …</p>
             </div>
           </div>
         </div>
