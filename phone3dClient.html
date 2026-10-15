@@ -55,7 +55,10 @@
             </div>
           </div>
         </div>
-        <button id="calibrate-btn" class="big" disabled hidden>Ausrichten</button>
+        <!-- Two steps (renderCalibration in phone3dClient.ts): "Ausrichten starten" → lay the phone flat →
+             "Ausrichten abschließen", enabled once it lies flat (and the iOS compass is ready) -->
+        <button id="calibrate-btn" class="big" disabled hidden>Ausrichten starten</button>
+        <p class="hint" id="calibrate-hint"></p>
       </section>
 
       <!-- Shown once connected or failed, hidden while connecting (setStatus in phone3dClient.ts) -->

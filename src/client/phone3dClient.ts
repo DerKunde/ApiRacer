@@ -47,6 +47,9 @@ const SOURCE_TEXT: Record<OrientationSource, string> = {
 const SEND_INTERVAL_MS = 1000 / 60;
 // How long each step of the source detection waits for a real event
 const SOURCE_TIMEOUT_MS = 1000;
+// Max. tilt (|beta| and |gamma|) that still counts as "lying flat" for the calibration. Much stricter than the
+// 30° of updateCompassOffset: a table is level, and any tilt here ends up as an error in the zero point.
+const FLAT_TOLERANCE_DEG = 5;
 const enqueue = createQueue((err) => log(`❌ ${String(err)}`));
 
 let signaling: SignalingClient;
@@ -64,6 +67,10 @@ let source: OrientationSource = 'none';
 let compassOffset: number | null = null;
 let yawZero = 0;
 let lastYaw = 0;
+// Calibration in two steps: false = "Ausrichten starten", true = waiting until the phone lies flat
+let calibrating = false;
+let lastBeta: number | null = null;
+let lastGamma: number | null = null;
 
 /**
  * state picks the icon in front of the text (.status[data-state] in style.css):
@@ -83,6 +90,8 @@ function setStatus(text: string, state?: 'connected' | 'disconnected'): void {
   byId('peer-card').hidden = !connected;
   byId('path').hidden = !connected;
   calibrateButton.hidden = !connected;
+  // Hint is empty outside the calibration – CSS (#calibrate-hint:empty) hides it then
+  byId('calibrate-hint').hidden = !connected;
   byId('log-section').hidden = state === undefined;
 }
 
@@ -148,6 +157,8 @@ function startOrientation(detected: Exclude<OrientationSource, 'none'>): void {
   else {
     window.addEventListener('deviceorientation', handleOrientation);
   }
+  // Calibration can be started
+  renderCalibration();
 }
 
 permissionButton.addEventListener('click', async () => {
@@ -196,14 +207,52 @@ function handleOrientation(event: DeviceOrientationEvent): void {
   else {
     absolute = source === 'deviceorientationabsolute';
   }
-  calibrateButton.disabled = source === 'webkit-compass' && !absolute;
+  lastBeta = beta;
+  lastGamma = gamma;
+  renderCalibration();
   lastYaw = yaw;
   quaternion = eulerToQuaternion(yaw - yawZero, beta, gamma);
   quaternionLabel.textContent = quaternion.map((value) => value.toFixed(2)).join(' / ');
 }
 
+/** Step 1 starts waiting for the flat phone, step 2 takes the current heading as "towards the screen". */
 function handleCalibration(): void {
-  yawZero = lastYaw;
+  if (calibrating) {
+    yawZero = lastYaw;
+    log('Ausgerichtet');
+  }
+  calibrating = !calibrating;
+  renderCalibration();
+}
+
+/**
+ * Button text, enabled state and hint for the current calibration step. Runs on every sensor event (60×/s),
+ * so it only writes to the DOM when something changed.
+ */
+function renderCalibration(): void {
+  let label = 'Ausrichten starten';
+  let enabled = source !== 'none';
+  let hint = '';
+
+  if (calibrating) {
+    const flat = lastBeta !== null && lastGamma !== null
+      && Math.abs(lastBeta) < FLAT_TOLERANCE_DEG && Math.abs(lastGamma) < FLAT_TOLERANCE_DEG;
+    // iOS: the yaw only becomes absolute once the compass delivered a valid flat measurement
+    const compassReady = source !== 'webkit-compass' || absolute;
+
+    label = 'Ausrichten abschließen';
+    enabled = flat && compassReady;
+    hint = !flat
+      ? 'Handy flach auf den Tisch legen, Oberkante zeigt zum Host-Bildschirm.'
+      : !compassReady
+        ? 'Warte auf Kompass …'
+        : 'Liegt flach – jetzt abschließen.';
+  }
+
+  if (calibrateButton.textContent !== label) calibrateButton.textContent = label;
+  calibrateButton.disabled = !enabled;
+  const hintEl = byId('calibrate-hint');
+  if (hintEl.textContent !== hint) hintEl.textContent = hint;
 }
 
 /** Rounds to 4 decimals – enough precision, shorter JSON */

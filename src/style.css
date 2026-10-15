@@ -561,6 +561,16 @@ button.big {
   border-radius: 12px;
 }
 
+/* Phone page: instruction below the calibrate button, only while calibrating (empty otherwise) */
+#calibrate-hint {
+  margin: 8px 0 0;
+  text-align: center;
+}
+
+#calibrate-hint:empty {
+  display: none;
+}
+
 /* Phone page: space to the calibrate button below, which has no margin of its own */
 #session > .peer-card {
   margin-bottom: 16px;
