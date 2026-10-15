@@ -153,11 +153,38 @@ a {
   gap: 16px;
 }
 
-/* One join option: QR code with the link below it */
+/* 3D host: label and room code in one line, vertically centered (the code is a box, see below) */
+.room-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--muted);
+}
+
+/* Code as a badge (same rounding as the buttons): the box ties it to its label, and the smaller size keeps
+   the two from looking like separate elements. host.html keeps the big standalone code. */
+.room-line .room-code {
+  /* letter-spacing also adds space after the last letter → subtract it on the right so the code looks centered */
+  padding: 2px calc(14px - 0.15em) 2px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 1.8rem;
+  letter-spacing: 0.15em;
+}
+
+/* One join option: QR code with the link (or copy button) below it */
 .links li {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* Same rounding as the buttons. Safe for scanning: only the white quiet zone (margin: 2 modules) is cut off */
+.links canvas {
+  border-radius: 10px;
 }
 
 table {
@@ -332,17 +359,196 @@ button.big {
   margin-top: 10px;
 }
 
-/* 3D view on the host: the renderer takes its size from this box, so it needs a definite width and height.
-   Square, because the phones are laid out in a grid with 3 per row → fills the view from 7 phones on */
-#orientation-view {
-  width: min(100%, 60vh, 480px);
-  aspect-ratio: 1;
+/* 3D host page: dashboard layout. Narrow screens stack everything (join first, so the QR code is on top);
+   from 1000px on: big 3D view on the left, join info + connected phones in a sidebar next to it (everything
+   important at a glance), log below over the full width. */
+.dashboard {
+  max-width: 1600px;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'title'
+    'join'
+    'view'
+    'peers'
+    'log';
 }
 
-/* Dev-only buttons below the 3D view (host3dPhoneOrientation.ts) */
+.dashboard > * {
+  margin: 0;
+}
+
+.dashboard-title {
+  grid-area: title;
+}
+
+.dashboard-join {
+  grid-area: join;
+}
+
+.dashboard-view {
+  grid-area: view;
+}
+
+.dashboard-peers {
+  grid-area: peers;
+}
+
+.dashboard-log {
+  grid-area: log;
+}
+
+.dashboard h2 {
+  margin-top: 0;
+}
+
+/* Collapsible join section (<details>): eye icon on the right instead of the browser marker, which would sit
+   on its own line next to the block-level <h2>. Open → "visibility", closed → "visibility_off". */
+.dashboard-join summary {
+  display: flex;
+  justify-content: space-between;
+  /* center, not baseline: the empty icon box has no text baseline of its own */
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+}
+
+/* Safari still shows its marker despite list-style: none */
+.dashboard-join summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Icons: Material Symbols Outlined from fonts.google.com/icons (Apache 2.0), saved as local SVGs in src/icons
+   instead of loading the icon font from Google (no request to Google, only the two icons we need).
+   Used as a mask: the box's background-color shows through the icon shape → it takes the text color,
+   also in dark mode. 1.5rem = h2 size, the icons are designed for a 24px box. */
+.dashboard-join summary::after {
+  --icon: url('./icons/visibility_off.svg');
+  content: '';
+  flex-shrink: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  background-color: var(--text);
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+
+.dashboard-join[open] summary::after {
+  --icon: url('./icons/visibility.svg');
+}
+
+/* No margin on the heading itself: it would count into the flex line and push the centered icon down.
+   Open: the room code line's own top margin provides the space; closed: the phone list moves right up. */
+.dashboard-join h2 {
+  margin: 0;
+}
+
+/* 3D view on the host: the renderer takes its size from this box (ResizeObserver in threeOrientationView.ts),
+   so it needs a definite width and height. Any aspect works – the camera refits the grid to it.
+   Framed like the peer cards, so the area is visible even without phones. clientWidth/-Height exclude the border,
+   so the canvas fits inside it; overflow: hidden clips the canvas corners to the rounding. */
+#orientation-view {
+  width: 100%;
+  height: min(60vh, 480px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* Connected phones: one card each (createPeerCard in host3dPhoneOrientation.ts) */
+.peer-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.peer-list:empty::before {
+  content: 'Noch keine Handys verbunden';
+  color: var(--muted);
+}
+
+/* --peer-color is set per card in createPeerCard – the same color as the phone's screen in the 3D view */
+.peer-card {
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 6px solid var(--peer-color, var(--border));
+  border-radius: 12px;
+}
+
+.peer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.peer-status {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.peer-rtt::before {
+  content: ' · ';
+}
+
+.peer-rtt:empty {
+  display: none;
+}
+
+.peer-card dl {
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+}
+
+/* Quaternion and path are long → wrap at spaces first, inside a word only if it doesn't fit otherwise */
+.peer-card dd {
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 1000px) {
+  .dashboard {
+    grid-template-columns: minmax(0, 1fr) 340px;
+    /* Peers row takes the rest of the view's height */
+    grid-template-rows: auto auto 1fr auto;
+    /* More space between the columns than between the rows, so the sidebar reads as its own area */
+    column-gap: 48px;
+    grid-template-areas:
+      'title title'
+      'view  join'
+      'view  peers'
+      'log   log';
+  }
+
+  /* The phone list fills the sidebar down to the bottom of the 3D view and scrolls inside it.
+     contain: size → the list adds no height of its own, so many phones can't stretch the grid rows. */
+  .dashboard-peers {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dashboard-peers .peer-list {
+    flex: 1;
+    min-height: 120px;
+    overflow-y: auto;
+    contain: size;
+  }
+
+  #orientation-view {
+    height: max(360px, 70vh);
+  }
+}
+
+/* Dev-only buttons above the 3D view (host3dPhoneOrientation.ts) */
 .test-buttons {
   display: flex;
   gap: 8px;
+  margin: 0 0 12px;
 }
 
 /* Canvas is inline by default → small gap below it */

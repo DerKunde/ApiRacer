@@ -26,7 +26,7 @@ interface Peer {
   pc: RTCPeerConnection;
   channel?: RTCDataChannel;
   enqueue: (task: () => Promise<void>) => void;
-  row: HTMLTableRowElement;
+  card: PeerCard;
   rttMs?: number;
   path?: string;
   pingTimer?: number;
@@ -35,9 +35,22 @@ interface Peer {
   absolute?: boolean;
 }
 
+/** One card per phone in the sidebar; keeps the elements renderPeer writes into. */
+interface PeerCard {
+  root: HTMLLIElement;
+  state: HTMLElement;
+  path: HTMLElement;
+  rtt: HTMLElement;
+  absolute: HTMLElement;
+  quaternion: HTMLElement;
+}
+
 const log = createLogger(byId('log'));
-const peersTable = byId<HTMLTableSectionElement>('peers');
+const peerList = byId<HTMLUListElement>('peers');
 const QR_CODE_SIZE = 200;
+let nextColorIndex = 0;
+// Short enough to stay narrower than the QR code – the button then stretches to exactly its width
+const COPY_LABEL = '🔗 Link kopieren';
 const view: OrientationView = new ThreeOrientationView(byId('orientation-view'));
 
 // Page the phone opens via QR code / link
@@ -126,27 +139,41 @@ function isOpenedOnLocalhost(): boolean {
   return ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
 }
 
-/** One way to join: QR code to scan with the phone, plus the link as text. */
+/** One way to join: QR code to scan with the phone, plus a button that copies the link (e.g. to send it via chat). */
 function createJoinOption(url: string): HTMLLIElement {
   const item = document.createElement('li');
   const canvas = document.createElement('canvas');
-  const link = document.createElement('a');
-  link.href = link.textContent = url;
-  item.append(canvas, link);
+  const copyButton = document.createElement('button');
+  copyButton.textContent = COPY_LABEL;
+  // Link is no longer shown as text – hovering the button still reveals it (handy with several LAN links in dev)
+  copyButton.title = url;
+  copyButton.addEventListener('click', () => void copyJoinLink(copyButton, url));
+  item.append(canvas, copyButton);
   createSessionQrCode(canvas, url);
   return item;
 }
 
+// Clipboard API only exists in a secure context (https or localhost) → on plain http via LAN IP
+// navigator.clipboard is undefined and the call throws, which ends up in the catch.
+async function copyJoinLink(button: HTMLButtonElement, url: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(url);
+    button.textContent = '✓ Kopiert';
+    window.setTimeout(() => (button.textContent = COPY_LABEL), 2000);
+  } catch (err) {
+    log(`❌ Link konnte nicht kopiert werden: ${String(err)} – Link: ${url}`);
+  }
+}
+
 function addPeer(id: PeerId): void {
   const pc = new RTCPeerConnection(createRtcConfig(iceServers));
-  const row = peersTable.insertRow();
-  // ID, status, path, quaternion, absolute, ping
-  for (let i = 0; i < 6; i++) row.insertCell();
-  row.cells[0].textContent = id;
-  const peer: Peer = { id, pc, row, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), orientationSeq: 0 };
+  // Same color for the phone model and its card, so you can tell which card belongs to which phone
+  const color = nextPeerColor();
+  const card = createPeerCard(id, color);
+  const peer: Peer = { id, pc, card, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), orientationSeq: 0 };
   peers.set(id, peer);
   renderPeer(peer);
-  view.addPeer(id);
+  view.addPeer(id, color);
   log(`[${id}] beigetreten`);
 
   pc.onicecandidate = ({ candidate }) => {
@@ -207,13 +234,62 @@ async function refreshPath(peer: Peer): Promise<void> {
   renderPeer(peer);
 }
 
+/**
+ * Hue steps by the golden ratio (0.381966 of the circle ≈ 137.5°), so consecutive colors are far apart and never
+ * repeat exactly. The counter only goes up – a phone that leaves doesn't hand its color to the next one.
+ * Comma syntax for hsl(), because THREE.Color's parser expects it.
+ */
+function nextPeerColor(): string {
+  const hue = (++nextColorIndex * 0.381966 % 1) * 360;
+  return `hsl(${hue.toFixed(1)}, 70%, 55%)`;
+}
+
+/** Card header: ID + connection state, below it the details as label/value pairs (<dl>). */
+function createPeerCard(id: PeerId, color: string): PeerCard {
+  const root = document.createElement('li');
+  root.className = 'peer-card';
+  // Read by .peer-card in style.css (colored left edge)
+  root.style.setProperty('--peer-color', color);
+
+  const head = document.createElement('div');
+  head.className = 'peer-head';
+  const name = document.createElement('strong');
+  name.textContent = id;
+  // Right side of the header: "connected · 12.3 ms"
+  const status = document.createElement('span');
+  status.className = 'peer-status';
+  const state = document.createElement('span');
+  const rtt = document.createElement('span');
+  rtt.className = 'peer-rtt';
+  status.append(state, rtt);
+  head.append(name, status);
+
+  const details = document.createElement('dl');
+  const addDetail = (label: string): HTMLElement => {
+    const term = document.createElement('dt');
+    const value = document.createElement('dd');
+    term.textContent = label;
+    details.append(term, value);
+    return value;
+  };
+  // Display order = call order
+  const path = addDetail('Weg');
+  const absolute = addDetail('Absolut');
+  const quaternion = addDetail('Quaternion');
+
+  root.append(head, details);
+  peerList.append(root);
+  return { root, state, path, rtt, absolute, quaternion };
+}
+
 function renderPeer(peer: Peer): void {
-  const [, state, path, quaternion, absolute, rtt] = peer.row.cells;
+  const { state, path, quaternion, absolute, rtt } = peer.card;
   state.textContent = peer.pc.connectionState;
   path.textContent = peer.path ?? '–';
   quaternion.textContent = peer.quaternion?.map((value) => value.toFixed(2)).join(' / ') ?? '–';
   absolute.textContent = peer.absolute === undefined ? '–' : peer.absolute ? 'ja' : 'nein';
-  rtt.textContent = peer.rttMs === undefined ? '–' : `${peer.rttMs.toFixed(1)} ms`;
+  // Empty until the first pong → CSS hides it together with its "·" separator (.peer-rtt:empty)
+  rtt.textContent = peer.rttMs === undefined ? '' : `${peer.rttMs.toFixed(1)} ms`;
 }
 
 function removePeer(id: PeerId): void {
@@ -221,7 +297,7 @@ function removePeer(id: PeerId): void {
   if (!peer) return;
   window.clearInterval(peer.pingTimer);
   peer.pc.close();
-  peer.row.remove();
+  peer.card.root.remove();
   view.removePeer(id);
   peers.delete(id);
   log(`[${id}] hat den Raum verlassen`);
@@ -235,7 +311,7 @@ function createSessionQrCode(canvas: HTMLCanvasElement, lobbyURL: string) {
 }
 
 // Dev-only test buttons: add/remove fake phones without real controllers, to check grid layout and camera fit.
-// They only talk to the view – no WebRTC, no table row.
+// They only talk to the view – no WebRTC, no peer card.
 function addTestButtons(): void {
   const testIds: PeerId[] = [];
   let nextTestId = 1;
@@ -245,7 +321,7 @@ function addTestButtons(): void {
   addButton.addEventListener('click', () => {
     const id = `test-${nextTestId++}`;
     testIds.push(id);
-    view.addPeer(id);
+    view.addPeer(id, nextPeerColor());
     // Random rotation, so you can see whether tilted neighbors overlap
     view.updatePeer(id, eulerToQuaternion(Math.random() * 360, Math.random() * 180 - 90, Math.random() * 180 - 90));
   });
@@ -261,7 +337,9 @@ function addTestButtons(): void {
   const testBar = document.createElement('p');
   testBar.className = 'test-buttons';
   testBar.append(addButton, removeButton);
-  byId('orientation-view').after(testBar);
+  // Above the view, not below: the phone list in the sidebar ends where the view section ends → stays aligned
+  // with the bottom edge of the canvas
+  byId('orientation-view').before(testBar);
 }
 
 // import.meta.env.DEV is replaced by `false` in the production build, so the test buttons are stripped there.

@@ -1,2 +1,1 @@
-# Shell scripts run on Linux and break with CRLF line endings
-*.sh text eol=lf
+* text=auto eol=lf
