@@ -17,7 +17,6 @@ export class ThreeOrientationView implements OrientationView {
     private readonly renderer: THREE.WebGLRenderer;
 
     private readonly phoneViews = new Map<PeerId, THREE.Mesh>();
-    private nextColorIndex = 0;
 
     constructor(container: HTMLElement) {
         this.camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
@@ -26,7 +25,8 @@ export class ThreeOrientationView implements OrientationView {
         this.renderer.setSize(container.clientWidth, container.clientHeight);
         container.append(this.renderer.domElement);
 
-        const bg = getComputedStyle(container).getPropertyValue('--bg').trim();
+        // Surface color like the peer cards, so the framed view stands out from the page background
+        const bg = getComputedStyle(container).getPropertyValue('--surface').trim();
         this.scene.background = new THREE.Color(bg);
 
         // Ambient: weak base brightness from everywhere, so sides facing away from the sun aren't pitch black
@@ -47,8 +47,9 @@ export class ThreeOrientationView implements OrientationView {
     }
 
     // One mock phone per peer with its own color, laid out in a grid (layoutPhones)
-    addPeer(id: PeerId): void {
-        const mesh = this.createNewPhoneMesh(this.colorForIndex(++this.nextColorIndex));
+    addPeer(id: PeerId, color: string): void {
+        // THREE.Color parses CSS color strings (hex, rgb(), hsl(), names)
+        const mesh = this.createNewPhoneMesh(new THREE.Color(color));
         this.phoneViews.set(id, mesh);
         this.scene.add(mesh);
         this.layoutPhones();
@@ -146,10 +147,6 @@ export class ThreeOrientationView implements OrientationView {
             objMaterials.forEach((material) => materials.add(material));
         });
         materials.forEach((material) => material.dispose());
-    }
-
-    private colorForIndex(index: number): THREE.Color {
-        return new THREE.Color().setHSL((index * 0.381966) % 1, 0.7, 0.55);
     }
 
     // Called by the ResizeObserver whenever the container changes size (window resize, fullscreen, beamer, zoom)

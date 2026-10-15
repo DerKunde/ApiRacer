@@ -6,32 +6,27 @@
     <title>ApiRacer · 3D-Handy (Host)</title>
   </head>
   <body>
-    <main>
-      <h1>🖥️ ApiRacer 3D-Handy</h1>
+    <main class="dashboard">
+      <h1 class="dashboard-title">3D-Handy Host</h1>
 
-      <section>
-        <p>Raumcode</p>
-        <p class="room-code" id="room-code">…</p>
-        <p>Mit dem Handy scannen oder Link öffnen:</p>
+      <!-- <details> = native collapsible, no JS: click on the summary toggles the "open" attribute -->
+      <details class="dashboard-join" open>
+        <summary><h2>Verbinden</h2></summary>
+        <p class="room-line">Raumcode <span class="room-code" id="room-code">…</span></p>
         <ul id="join-links" class="links"></ul>
-      </section>
+      </details>
 
-      <section>
+      <section class="dashboard-view">
         <h2>Ansicht</h2>
         <div id="orientation-view"></div>
       </section>
 
-      <section>
+      <section class="dashboard-peers">
         <h2>Verbundene Handys</h2>
-        <table>
-          <thead>
-            <tr><th>ID</th><th>Status</th><th>Verbindungsweg</th><th>Quaternion</th><th>Absolut</th><th>Ping</th></tr>
-          </thead>
-          <tbody id="peers"></tbody>
-        </table>
+        <ul id="peers" class="peer-list"></ul>
       </section>
 
-      <section>
+      <section class="dashboard-log">
         <h2>Protokoll</h2>
         <ol id="log" class="log"></ol>
       </section>

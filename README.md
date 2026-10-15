@@ -10,10 +10,10 @@ The game itself is not built yet. For now, ApiRacer consists of two technical de
 
 No installation needed:
 
-1. On the PC, open [stud.messy-desk-studio.de](https://stud.messy-desk-studio.de) and choose **3D-Handy anzeigen**. The page shows a QR code.
+1. On the PC, open [stud.messy-desk-studio.de](https://stud.messy-desk-studio.de) and choose **3D-Handys anzeigen**. The page shows a QR code.
 2. Scan the QR code with your phone (Wi-Fi or mobile data both work).
-3. On iPhone, tap **Device Gyro Permission** to allow motion sensor access.
-4. Hold the phone flat with its top edge pointing to the monitor and tap **Ausrichten** to align the model.
+3. If the phone shows **Bewegungssensoren freigeben**, tap it and allow motion sensor access (iPhone asks for this; the button only appears when no sensor data arrives yet).
+4. Align the model with the monitor: tap **Ausrichten starten**, lay the phone flat on the table with its top edge pointing to the monitor, then tap **Ausrichten abschließen** (enabled once the phone lies flat).
 
 Several phones can join the same room.
 

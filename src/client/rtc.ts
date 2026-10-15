@@ -120,10 +120,7 @@ export async function getConnectionPath(pc: RTCPeerConnection): Promise<Connecti
 
 export function describePath(path: ConnectionPath): string {
   const types = [path.local, path.remote];
-  const summary = types.includes('relay')
-    ? 'Relay über TURN-Server'
-    : types.includes('srflx')
-      ? 'direkt durch NAT (STUN)'
-      : 'direkt im lokalen Netz';
-  return `${summary} · ${path.local} ↔ ${path.remote} · ${path.protocol.toUpperCase()}`;
+  const summary = types.includes('relay') ? 'TURN-Relay' : types.includes('srflx') ? 'Direkt via STUN' : 'Direkt im LAN';
+  // Candidate types + transport protocol in brackets, e.g. "Direkt im LAN (host↔host, UDP)"
+  return `${summary} (${path.local}↔${path.remote}, ${path.protocol.toUpperCase()})`;
 }

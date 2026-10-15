@@ -7,32 +7,62 @@
   </head>
   <body>
     <main>
-      <h1>📱 ApiRacer 3D-Handy</h1>
+      <h1>3D-Handy Client</h1>
 
-      <button id="gyroPermissionButton">Device Gyro Permission</button>
-      <form id="join-form" class="join-form">
-        <label>
-          Raumcode
-          <input id="room-input" maxlength="4" autocapitalize="characters" autocomplete="off" required />
-        </label>
+      <!-- No visible label: the 4 underlines in the field show what goes in (style.css), aria-label names it for screen readers -->
+      <form id="join-form" class="join-row">
+        <input
+          id="room-input"
+          aria-label="Raumcode"
+          maxlength="4"
+          autocapitalize="characters"
+          autocomplete="off"
+          required
+        />
         <button type="submit">Beitreten</button>
       </form>
+      <!-- Hidden once a room is joined (main() in phone3dClient.ts) -->
+      <p class="hint" id="join-hint">Raumcode des Hosts eintragen oder QR-Code mit der Kamera scannen und Link öffnen.</p>
 
       <section id="session" hidden>
         <p class="status" id="status">…</p>
-        <dl>
-          <dt>Raum</dt><dd id="room">–</dd>
-          <dt>Peer-ID</dt><dd id="peer-id">–</dd>
-          <dt>Verbindungsweg</dt><dd id="path">–</dd>
-          <dt>Quelle</dt><dd id="orientation-source">–</dd>
-          <dt>Alpha / Beta / Gamma</dt><dd id="orientation-euler">–</dd>
-          <dt>Kompass (Genauigkeit)</dt><dd id="compass-heading">–</dd>
-          <dt>Quaternion</dt><dd id="orientation-quaternion">–</dd>
-        </dl>
-        <button id="calibrate-btn" class="big" disabled>🧭 Ausrichten</button>
+        <!-- Sub-headline under "Verbunden mit …": the connection path, known as soon as the DataChannel is open.
+             Only shown while connected (setStatus), empty until the first getStats() result -->
+        <p class="status-sub" id="path" hidden></p>
+        <!-- Same card as for this phone on the host page (createPeerCard in host3dPhoneOrientation.ts).
+             Card, calibrate button and log are only shown while connected (setStatus in phone3dClient.ts) -->
+        <div class="peer-card" id="peer-card" hidden>
+          <div class="peer-head">
+            <strong id="peer-id">–</strong>
+            <!-- "connected · 12.3 ms" – the ping span stays empty (and hidden) until the first pong -->
+            <span class="peer-status"><span id="connection-state">–</span><span class="peer-rtt" id="rtt"></span></span>
+          </div>
+          <div class="card-body">
+            <dl>
+              <dt>Quelle</dt><dd id="orientation-source">–</dd>
+              <!-- Short labels: the longest label sets the label column width and leaves the rest for the values -->
+              <dt>α / β / γ</dt><dd id="orientation-euler">–</dd>
+              <dt>Kompass</dt><dd id="compass-heading">–</dd>
+              <dt>Quaternion</dt><dd id="orientation-quaternion" class="quaternion">–</dd>
+            </dl>
+            <!-- Covers the values until the sensors are allowed – without permission they stay empty anyway.
+                 iOS only shows the permission prompt after a tap, so this has to be a button. -->
+            <div class="sensor-overlay" id="sensor-overlay">
+              <!-- Start state while initOrientation() checks whether sensor events already arrive (phone3dClient.ts):
+                   sensors running → overlay hidden; iOS without permission → button enabled; no sensors → hint only -->
+              <button id="sensor-permission-btn" disabled>Bewegungssensoren freigeben</button>
+              <p id="sensor-hint">Suche Sensoren …</p>
+            </div>
+          </div>
+        </div>
+        <!-- Two steps (renderCalibration in phone3dClient.ts): "Ausrichten starten" → lay the phone flat →
+             "Ausrichten abschließen", enabled once it lies flat (and the iOS compass is ready) -->
+        <button id="calibrate-btn" class="big" disabled hidden>Ausrichten starten</button>
+        <p class="hint" id="calibrate-hint"></p>
       </section>
 
-      <section>
+      <!-- Shown once connected or failed, hidden while connecting (setStatus in phone3dClient.ts) -->
+      <section id="log-section" hidden>
         <h2>Protokoll</h2>
         <ol id="log" class="log"></ol>
       </section>

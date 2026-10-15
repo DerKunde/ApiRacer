@@ -103,21 +103,23 @@ a {
   transform: translateY(-2px);
 }
 
-.landing-button.primary {
-  border-color: var(--accent);
-}
-
 .landing-button strong {
   font-size: 1.6rem;
 }
 
-.landing-button span {
+/* balance: spreads the words evenly over the lines instead of leaving a single word alone in the last line.
+   Browsers without support simply wrap as before. */
+.landing-button span,
+.landing-check span {
   color: var(--muted);
+  text-wrap: balance;
 }
 
-.landing-icon {
-  font-size: 2.5rem;
-  line-height: 1;
+/* The tiles are links, and the global a { word-break: break-all } (meant for long URLs) would split words
+   anywhere – together with balance that cut "verbundenen" into "verbu / ndenen". Normal word breaks here. */
+.landing-button,
+.landing-check {
+  word-break: normal;
 }
 
 /* Phones in landscape have little height: tighten spacing */
@@ -130,10 +132,6 @@ a {
 
   .landing-button {
     padding: 16px;
-  }
-
-  .landing-icon {
-    font-size: 1.8rem;
   }
 }
 
@@ -153,11 +151,38 @@ a {
   gap: 16px;
 }
 
-/* One join option: QR code with the link below it */
+/* 3D host: label and room code in one line, vertically centered (the code is a box, see below) */
+.room-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: var(--muted);
+}
+
+/* Code as a badge (same rounding as the buttons): the box ties it to its label, and the smaller size keeps
+   the two from looking like separate elements. host.html keeps the big standalone code. */
+.room-line .room-code {
+  /* letter-spacing also adds space after the last letter → subtract it on the right so the code looks centered */
+  padding: 2px calc(14px - 0.15em) 2px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 1.8rem;
+  letter-spacing: 0.15em;
+}
+
+/* One join option: QR code with the link (or copy button) below it */
 .links li {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* Same rounding as the buttons. Safe for scanning: only the white quiet zone (margin: 2 modules) is cut off */
+.links canvas {
+  border-radius: 10px;
 }
 
 table {
@@ -187,6 +212,51 @@ tr.flash {
 .status {
   font-size: 1.4rem;
   font-weight: 600;
+}
+
+/* Phone page: icon in front of the status text, set via data-state (setStatus in phone3dClient.ts).
+   Material Symbols "link" / "link_off" as mask like the eye icon on the host – colored by background-color.
+   1.2em ≈ the text height; flex keeps icon and text vertically centered. */
+.status[data-state] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status[data-state]::before {
+  content: '';
+  flex-shrink: 0;
+  width: 1.2em;
+  height: 1.2em;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+
+.status[data-state='connected']::before {
+  --icon: url('./icons/link.svg');
+  background-color: var(--ok);
+}
+
+.status[data-state='disconnected']::before {
+  --icon: url('./icons/link_off.svg');
+  background-color: var(--error);
+}
+
+/* Phone page: status line sits closer to its sub-headline (connection path) */
+#session > .status {
+  margin-bottom: 2px;
+}
+
+/* Indented by icon width (1.2em of the 1.4rem status font) + gap, so it lines up with the status text */
+.status-sub {
+  margin: 0 0 16px;
+  padding-left: calc(1.2 * 1.4rem + 8px);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.status-sub:empty {
+  display: none;
 }
 
 dl {
@@ -241,6 +311,39 @@ button.big {
   letter-spacing: 0.2em;
 }
 
+/* 3D phone page: room code field and join button in one row, same height (stretch) */
+.join-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+/* Field exactly 4 characters wide with one underline per character → shows that a 4-letter code goes in.
+   Monospace, so every letter is 1ch wide: one cell = 1ch letter + --gap letter-spacing, and the underlines
+   (repeating gradient: 1ch line, --gap transparent) sit exactly below the letters. */
+.join-row input {
+  --gap: 0.5em;
+  --pad: 14px;
+  flex: none;
+  /* letter-spacing also follows the 4th letter → subtract it from the right padding, so both sides look equal.
+     Width: 4 cells + padding + 1px border each side (box-sizing: border-box) + 2px room for the text caret,
+     without it the field scrolls the text by a pixel after the 4th letter. */
+  padding: 8px calc(var(--pad) - var(--gap)) 8px var(--pad);
+  width: calc(4 * (1ch + var(--gap)) + 2 * var(--pad) - var(--gap) + 2px + 2px);
+  font: 700 1.5rem/1.2 ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  text-transform: uppercase;
+  letter-spacing: var(--gap);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  /* Underlines in the content box (= where the letters are), card color below. Size = exactly 4 cells, not 100%:
+     the content box is 2px wider (caret room), and 100% would draw the first 2px of a 5th underline. */
+  background:
+    repeating-linear-gradient(90deg, var(--muted) 0 1ch, transparent 1ch calc(1ch + var(--gap)))
+      left bottom / calc(4 * (1ch + var(--gap))) 2px no-repeat content-box,
+    var(--surface);
+}
+
 .log {
   list-style: none;
   padding: 0;
@@ -251,9 +354,65 @@ button.big {
   color: var(--muted);
 }
 
-.landing-footer {
+/* Landing page: sensor check as a full-width row between demo and race section, title above subtitle */
+.landing-check {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.landing-check:hover,
+.landing-check:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+/* Landing page: racing game is work in progress → muted, dashed borders, no hover lift. Still clickable. */
+.landing-wip h2 {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+
+/* Explains what the race part currently shows; narrower than the page so the centered lines stay readable */
+.landing-wip-sub {
+  max-width: 60ch;
+  margin: 0 auto 12px;
   color: var(--muted);
   font-size: 0.9rem;
+  /* pretty instead of balance for longer paragraphs: only avoids a lonely last word */
+  text-wrap: pretty;
+}
+
+.landing-wip .landing-button {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.landing-wip .landing-button:hover,
+.landing-wip .landing-button:focus-visible {
+  opacity: 1;
+  transform: none;
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 0.8rem;
+  font-weight: 600;
+  vertical-align: middle;
 }
 
 .hint {
@@ -332,17 +491,254 @@ button.big {
   margin-top: 10px;
 }
 
-/* 3D view on the host: the renderer takes its size from this box, so it needs a definite width and height.
-   Square, because the phones are laid out in a grid with 3 per row → fills the view from 7 phones on */
-#orientation-view {
-  width: min(100%, 60vh, 480px);
-  aspect-ratio: 1;
+/* 3D host page: dashboard layout. Narrow screens stack everything (join first, so the QR code is on top);
+   from 1000px on: big 3D view on the left, join info + connected phones in a sidebar next to it (everything
+   important at a glance), log below over the full width. */
+.dashboard {
+  max-width: 1600px;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    'title'
+    'join'
+    'view'
+    'peers'
+    'log';
 }
 
-/* Dev-only buttons below the 3D view (host3dPhoneOrientation.ts) */
+.dashboard > * {
+  margin: 0;
+}
+
+.dashboard-title {
+  grid-area: title;
+}
+
+.dashboard-join {
+  grid-area: join;
+}
+
+.dashboard-view {
+  grid-area: view;
+}
+
+.dashboard-peers {
+  grid-area: peers;
+}
+
+.dashboard-log {
+  grid-area: log;
+}
+
+.dashboard h2 {
+  margin-top: 0;
+}
+
+/* Collapsible join section (<details>): eye icon on the right instead of the browser marker, which would sit
+   on its own line next to the block-level <h2>. Open → "visibility", closed → "visibility_off". */
+.dashboard-join summary {
+  display: flex;
+  justify-content: space-between;
+  /* center, not baseline: the empty icon box has no text baseline of its own */
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+}
+
+/* Safari still shows its marker despite list-style: none */
+.dashboard-join summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Icons: Material Symbols Outlined from fonts.google.com/icons (Apache 2.0), saved as local SVGs in src/icons
+   instead of loading the icon font from Google (no request to Google, only the two icons we need).
+   Used as a mask: the box's background-color shows through the icon shape → it takes the text color,
+   also in dark mode. 1.5rem = h2 size, the icons are designed for a 24px box. */
+.dashboard-join summary::after {
+  --icon: url('./icons/visibility_off.svg');
+  content: '';
+  flex-shrink: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  background-color: var(--text);
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+
+.dashboard-join[open] summary::after {
+  --icon: url('./icons/visibility.svg');
+}
+
+/* No margin on the heading itself: it would count into the flex line and push the centered icon down.
+   Open: the room code line's own top margin provides the space; closed: the phone list moves right up. */
+.dashboard-join h2 {
+  margin: 0;
+}
+
+/* 3D view on the host: the renderer takes its size from this box (ResizeObserver in threeOrientationView.ts),
+   so it needs a definite width and height. Any aspect works – the camera refits the grid to it.
+   Framed like the peer cards, so the area is visible even without phones. clientWidth/-Height exclude the border,
+   so the canvas fits inside it; overflow: hidden clips the canvas corners to the rounding. */
+#orientation-view {
+  width: 100%;
+  height: min(60vh, 480px);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* Connected phones: one card each (createPeerCard in host3dPhoneOrientation.ts) */
+.peer-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.peer-list:empty::before {
+  content: 'Noch keine Handys verbunden';
+  color: var(--muted);
+}
+
+/* Used on the host (one card per phone) and on the phone page (its own card).
+   --peer-color is set per card in createPeerCard – the same color as the phone's screen in the 3D view;
+   the phone page doesn't know its color → plain border */
+.peer-card {
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 6px solid var(--peer-color, var(--border));
+  border-radius: 12px;
+}
+
+/* Phone page: instruction below the calibrate button, only while calibrating (empty otherwise) */
+#calibrate-hint {
+  margin: 8px 0 0;
+  text-align: center;
+}
+
+#calibrate-hint:empty {
+  display: none;
+}
+
+/* Phone page: space to the calibrate button below, which has no margin of its own */
+#session > .peer-card {
+  margin-bottom: 16px;
+}
+
+/* Phone page: the card body is the positioning box for the permission overlay – the header stays uncovered */
+.card-body {
+  position: relative;
+}
+
+/* Call to action over the (still empty) sensor values: blurs them, button + hint centered on top.
+   Slightly larger than the body (negative inset) so it reaches the card's inner edges. */
+.sensor-overlay {
+  position: absolute;
+  inset: 0 -8px -6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  text-align: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+/* display: flex above would beat the hidden attribute's display: none */
+.sensor-overlay[hidden] {
+  display: none;
+}
+
+.sensor-overlay p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.peer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.peer-status {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.peer-rtt::before {
+  content: ' · ';
+}
+
+.peer-rtt:empty {
+  display: none;
+}
+
+.peer-card dl {
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+}
+
+/* Quaternion and path are long → wrap at spaces first, inside a word only if it doesn't fit otherwise */
+.peer-card dd {
+  overflow-wrap: anywhere;
+}
+
+/* Quaternion always in one line. tabular-nums: all digits equally wide, so the line doesn't jitter
+   at 60 updates per second when e.g. a 1 becomes an 8 */
+.peer-card dd.quaternion {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (min-width: 1000px) {
+  .dashboard {
+    grid-template-columns: minmax(0, 1fr) 340px;
+    /* Peers row takes the rest of the view's height */
+    grid-template-rows: auto auto 1fr auto;
+    /* More space between the columns than between the rows, so the sidebar reads as its own area */
+    column-gap: 48px;
+    grid-template-areas:
+      'title title'
+      'view  join'
+      'view  peers'
+      'log   log';
+  }
+
+  /* The phone list fills the sidebar down to the bottom of the 3D view and scrolls inside it.
+     contain: size → the list adds no height of its own, so many phones can't stretch the grid rows. */
+  .dashboard-peers {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dashboard-peers .peer-list {
+    flex: 1;
+    min-height: 120px;
+    overflow-y: auto;
+    contain: size;
+  }
+
+  #orientation-view {
+    height: max(360px, 70vh);
+  }
+}
+
+/* Dev-only buttons above the 3D view (host3dPhoneOrientation.ts) */
 .test-buttons {
   display: flex;
   gap: 8px;
+  margin: 0 0 12px;
 }
 
 /* Canvas is inline by default → small gap below it */
