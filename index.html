@@ -13,33 +13,42 @@
         <p>Dein Handy ist das Lenkrad.</p>
       </header>
 
-      <nav class="landing-actions">
-        <a class="landing-button primary" href="/host.html">
-          <span class="landing-icon">🏟️</span>
-          <strong>Create Race</strong>
-          <span>Am PC: Rennen starten und Strecke anzeigen</span>
-        </a>
-        <a class="landing-button" href="/controller.html">
-          <span class="landing-icon">🎮</span>
-          <strong>Join Race</strong>
-          <span>Am Handy: mit Raumcode beitreten und lenken</span>
-        </a>
-      </nav>
-
+      <!-- Main demo first -->
       <nav class="landing-actions">
         <a class="landing-button" href="/host3dPhoneOrientation.html">
-          <span class="landing-icon">🧊</span>
-          <strong>3D-Handy anzeigen</strong>
+          <strong>3D-Handys anzeigen</strong>
           <span>Am PC: Drehung der verbundenen Handys in 3D sehen</span>
         </a>
         <a class="landing-button" href="/phone3dClient.html">
-          <span class="landing-icon">📱</span>
           <strong>3D-Handy verbinden</strong>
           <span>Am Handy: mit Raumcode beitreten und Drehung senden</span>
         </a>
       </nav>
 
-      <a class="landing-footer" href="/sensors.html">🔧 Sensor-Check</a>
+      <!-- Sensor check as its own row: more prominent than a footer link, and separates the demo from the race -->
+      <a class="landing-check" href="/sensors.html">
+        <strong>Sensor-Check</strong>
+        <span>Welche Sensor-APIs unterstützt dein Gerät?</span>
+      </a>
+
+      <!-- Racing game: still work in progress → own section with badge, muted buttons (still clickable) -->
+      <section class="landing-wip">
+        <h2>Rennen <span class="badge">In Arbeit</span></h2>
+        <p class="landing-wip-sub">
+          Aktuell gibt es hier nur die Kommunikation zwischen den Clients per WebRTC zu sehen. Anders als in der
+          Tech-Demo „3D-Handys“ wird hier nur ein berechneter Lenkwert an den Host gesendet.
+        </p>
+        <nav class="landing-actions">
+          <a class="landing-button" href="/host.html">
+            <strong>Create Race</strong>
+            <span>Am PC: Raum öffnen und Lenkwerte der Handys sehen</span>
+          </a>
+          <a class="landing-button" href="/controller.html">
+            <strong>Join Race</strong>
+            <span>Am Handy: mit Raumcode beitreten und lenken</span>
+          </a>
+        </nav>
+      </section>
     </main>
   </body>
 </html>

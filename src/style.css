@@ -103,21 +103,23 @@ a {
   transform: translateY(-2px);
 }
 
-.landing-button.primary {
-  border-color: var(--accent);
-}
-
 .landing-button strong {
   font-size: 1.6rem;
 }
 
-.landing-button span {
+/* balance: spreads the words evenly over the lines instead of leaving a single word alone in the last line.
+   Browsers without support simply wrap as before. */
+.landing-button span,
+.landing-check span {
   color: var(--muted);
+  text-wrap: balance;
 }
 
-.landing-icon {
-  font-size: 2.5rem;
-  line-height: 1;
+/* The tiles are links, and the global a { word-break: break-all } (meant for long URLs) would split words
+   anywhere – together with balance that cut "verbundenen" into "verbu / ndenen". Normal word breaks here. */
+.landing-button,
+.landing-check {
+  word-break: normal;
 }
 
 /* Phones in landscape have little height: tighten spacing */
@@ -130,10 +132,6 @@ a {
 
   .landing-button {
     padding: 16px;
-  }
-
-  .landing-icon {
-    font-size: 1.8rem;
   }
 }
 
@@ -356,9 +354,65 @@ button.big {
   color: var(--muted);
 }
 
-.landing-footer {
+/* Landing page: sensor check as a full-width row between demo and race section, title above subtitle */
+.landing-check {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 20px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.15s, transform 0.15s;
+}
+
+.landing-check:hover,
+.landing-check:focus-visible {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+/* Landing page: racing game is work in progress → muted, dashed borders, no hover lift. Still clickable. */
+.landing-wip h2 {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+
+/* Explains what the race part currently shows; narrower than the page so the centered lines stay readable */
+.landing-wip-sub {
+  max-width: 60ch;
+  margin: 0 auto 12px;
   color: var(--muted);
   font-size: 0.9rem;
+  /* pretty instead of balance for longer paragraphs: only avoids a lonely last word */
+  text-wrap: pretty;
+}
+
+.landing-wip .landing-button {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.landing-wip .landing-button:hover,
+.landing-wip .landing-button:focus-visible {
+  opacity: 1;
+  transform: none;
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  color: var(--warn);
+  font-size: 0.8rem;
+  font-weight: 600;
+  vertical-align: middle;
 }
 
 .hint {
