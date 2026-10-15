@@ -151,6 +151,7 @@ src/
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
 | [server.ts](server/server.ts)                                      | Signaling server (WebSocket): rooms, relays offer/answer/ICE, hands out TURN credentials |
 | [server.test.ts](server/server.test.ts)                            | Tests of the signaling server: rooms, joining, relaying, leaving                         |
+| [hardening.test.ts](server/hardening.test.ts)                      | Tests against misbehaving clients: broken and oversized messages, origin, limits         |
 | [testServer.ts](server/testServer.ts)                              | Test helpers: starts `server.ts` in its own process, WebSocket client for the tests      |
 | [protocol.ts](src/shared/protocol.ts)                              | Message types shared by signaling server, host sessions and phone (client)                |
 | [signaling.ts](src/client/common/signaling.ts)                     | WebSocket connection to the signaling server                                             |
