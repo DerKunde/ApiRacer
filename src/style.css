@@ -244,6 +244,23 @@ tr.flash {
   background-color: var(--error);
 }
 
+/* Phone page: status line sits closer to its sub-headline (connection path) */
+#session > .status {
+  margin-bottom: 2px;
+}
+
+/* Indented by icon width (1.2em of the 1.4rem status font) + gap, so it lines up with the status text */
+.status-sub {
+  margin: 0 0 16px;
+  padding-left: calc(1.2 * 1.4rem + 8px);
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.status-sub:empty {
+  display: none;
+}
+
 dl {
   display: grid;
   grid-template-columns: max-content 1fr;

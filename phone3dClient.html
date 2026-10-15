@@ -26,8 +26,12 @@
 
       <section id="session" hidden>
         <p class="status" id="status">…</p>
-        <!-- Same card as for this phone on the host page (createPeerCard in host3dPhoneOrientation.ts) -->
-        <div class="peer-card">
+        <!-- Sub-headline under "Verbunden mit …": the connection path, known as soon as the DataChannel is open.
+             Only shown while connected (setStatus), empty until the first getStats() result -->
+        <p class="status-sub" id="path" hidden></p>
+        <!-- Same card as for this phone on the host page (createPeerCard in host3dPhoneOrientation.ts).
+             Card, calibrate button and log are only shown while connected (setStatus in phone3dClient.ts) -->
+        <div class="peer-card" id="peer-card" hidden>
           <div class="peer-head">
             <strong id="peer-id">–</strong>
             <!-- "connected · 12.3 ms" – the ping span stays empty (and hidden) until the first pong -->
@@ -35,7 +39,6 @@
           </div>
           <div class="card-body">
             <dl>
-              <dt>Weg</dt><dd id="path">–</dd>
               <dt>Quelle</dt><dd id="orientation-source">–</dd>
               <!-- Short labels: the longest label sets the label column width and leaves the rest for the values -->
               <dt>α / β / γ</dt><dd id="orientation-euler">–</dd>
@@ -51,10 +54,10 @@
             </div>
           </div>
         </div>
-        <button id="calibrate-btn" class="big" disabled>Ausrichten</button>
+        <button id="calibrate-btn" class="big" disabled hidden>Ausrichten</button>
       </section>
 
-      <!-- Hidden until a room is joined (main() in phone3dClient.ts) – before that there's nothing to log -->
+      <!-- Shown once connected or failed, hidden while connecting (setStatus in phone3dClient.ts) -->
       <section id="log-section" hidden>
         <h2>Protokoll</h2>
         <ol id="log" class="log"></ol>

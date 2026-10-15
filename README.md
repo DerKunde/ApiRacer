@@ -12,7 +12,7 @@ No installation needed:
 
 1. On the PC, open [stud.messy-desk-studio.de](https://stud.messy-desk-studio.de) and choose **3D-Handy anzeigen**. The page shows a QR code.
 2. Scan the QR code with your phone (Wi-Fi or mobile data both work).
-3. On iPhone, tap **Device Gyro Permission** to allow motion sensor access.
+3. Tap **Bewegungssensoren freigeben** on the phone to start the motion sensors (on iPhone this also asks for permission).
 4. Hold the phone flat with its top edge pointing to the monitor and tap **Ausrichten** to align the model.
 
 Several phones can join the same room.

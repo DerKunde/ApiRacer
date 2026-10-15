@@ -72,11 +72,21 @@ function setStatus(text: string, state?: 'connected' | 'disconnected'): void {
   statusEl.textContent = text;
   if (state) statusEl.dataset.state = state;
   else delete statusEl.dataset.state;
+  // Every status change also goes to the log → after a failure it shows how far the connection got
+  // (e.g. "Raum ABCD nicht gefunden" from the server is only reported here)
+  log(text);
+
+  // Card and calibrate button only while connected. The log also stays after an error or a disconnect –
+  // that's when its details (ICE candidates, connection states) are most useful. While connecting: status line only.
+  const connected = state === 'connected';
+  byId('peer-card').hidden = !connected;
+  byId('path').hidden = !connected;
+  calibrateButton.hidden = !connected;
+  byId('log-section').hidden = state === undefined;
 }
 
 async function main(roomId: string): Promise<void> {
   byId('session').hidden = false;
-  byId('log-section').hidden = false;
   byId('join-hint').hidden = true;
 
   if (!hasWebRtcSupport()) {
@@ -208,6 +218,8 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
     setStatus('Verbindung getrennt', 'disconnected');
     window.clearInterval(pathTimer);
     window.clearInterval(sendTimer);
+    // No more pongs → drop the last ping instead of showing a stale value (CSS hides the empty span incl. "·")
+    byId('rtt').textContent = '';
   };
   channel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
@@ -225,6 +237,9 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
     log(`Verbindungsstatus: ${connection.connectionState}`);
     // Card header shows the same state as this phone's card on the host
     byId('connection-state').textContent = connection.connectionState;
+    // ICE found no working path (e.g. no TURN server reachable): the DataChannel never opens, so without this
+    // the status would stay at "Baue WebRTC-Verbindung auf …" and the log hidden
+    if (connection.connectionState === 'failed') setStatus('Verbindung fehlgeschlagen', 'disconnected');
   };
 
   enqueue(async () => {
@@ -240,7 +255,7 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
 
 async function refreshPath(connection: RTCPeerConnection): Promise<void> {
   const path = await getConnectionPath(connection);
-  byId('path').textContent = path ? describePath(path) : '–';
+  byId('path').textContent = path ? describePath(path) : '';
 }
 
 const roomInput = byId<HTMLInputElement>('room-input');
