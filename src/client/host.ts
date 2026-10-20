@@ -11,16 +11,24 @@ import {
 } from './rtc';
 import { SignalingClient } from './signaling';
 import { byId, createLogger, hasWebRtcSupport } from './ui';
-import QRCode from 'qrcode';
+import { buildJoinURLs, createJoinOption, createPeerCard, nextPeerColor, type PeerCard } from './hostDashboard';
+import { MAX_RACERS, type RaceView } from './raceView';
+import { ThreeRaceView } from './threeRaceView';
 
 /** Host = PC. Accepts an offer from every phone and keeps one PeerConnection per phone. */
+
+// Peer card rows, in display order
+const DETAILS = ['Weg', 'Lenkwert'] as const;
 
 interface Peer {
   id: PeerId;
   pc: RTCPeerConnection;
   channel?: RTCDataChannel;
   enqueue: (task: () => Promise<void>) => void;
-  row: HTMLTableRowElement;
+  card: PeerCard<(typeof DETAILS)[number]>;
+  color: string;
+  // false = joined when the race was full → connected, but no car
+  racer: boolean;
   rttMs?: number;
   path?: string;
   pingTimer?: number;
@@ -29,8 +37,11 @@ interface Peer {
 }
 
 const log = createLogger(byId('log'));
-const peersTable = byId<HTMLTableSectionElement>('peers');
-const QR_CODE_SIZE = 200;
+const peerList = byId<HTMLUListElement>('peers');
+const view: RaceView = new ThreeRaceView(byId('race-view'));
+
+// Page the phone opens via QR code / link
+const JOIN_PAGE = '/controller.html';
 const peers = new Map<PeerId, Peer>();
 let signaling: SignalingClient;
 let iceServers: IceServer[] | undefined;
@@ -81,62 +92,25 @@ function handleServerMessage(msg: ServerMessage): void {
 function showRoom(roomId: string, lanAddresses: string[]): void {
   byId('room-code').textContent = roomId;
 
-  // Dev server opened on "localhost": the phone can't use that name → offer every LAN address instead.
-  // import.meta.env.DEV is replaced by `false` in the production build, so this branch is stripped there.
-  const urls =
-    import.meta.env.DEV && isOpenedOnLocalhost() ? buildLocalRoomURLs(roomId, lanAddresses) : [buildRoomURL(roomId)];
-
-  byId('join-links').replaceChildren(...urls.map(createJoinOption));
+  const urls = buildJoinURLs(JOIN_PAGE, roomId, lanAddresses);
+  byId('join-links').replaceChildren(...urls.map((url) => createJoinOption(url, log)));
   if (urls.length === 0) log('⚠️ Keine LAN-Adresse gefunden – ist der PC mit einem Netzwerk verbunden?');
   log(`Raum ${roomId} erstellt – warte auf Handys …`);
 }
 
-/** Production: the phone opens the controller under the same address as this page. */
-function buildRoomURL(roomId: string): string {
-  // URL keeps protocol and port of the current page and omits default ports (no "host:/…")
-  const url = new URL('/controller.html', location.origin);
-  url.searchParams.set('room', roomId);
-  return url.href;
-}
-
-/**
- * Local dev: one URL per LAN address of the PC. The server can only list all interfaces
- * (incl. virtual adapters like WSL/Hyper-V/VPN), so we offer all of them – at least one works.
- */
-function buildLocalRoomURLs(roomId: string, lanAddresses: string[]): string[] {
-  return lanAddresses.map((address) => {
-    const url = new URL(buildRoomURL(roomId));
-    url.hostname = address;
-    return url.href;
-  });
-}
-
-function isOpenedOnLocalhost(): boolean {
-  return ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
-}
-
-/** One way to join: QR code to scan with the phone, plus the link as text. */
-function createJoinOption(url: string): HTMLLIElement {
-  const item = document.createElement('li');
-  const canvas = document.createElement('canvas');
-  const link = document.createElement('a');
-  link.href = link.textContent = url;
-  item.append(canvas, link);
-  createSessionQrCode(canvas, url);
-  return item;
-}
-
 function addPeer(id: PeerId): void {
   const pc = new RTCPeerConnection(createRtcConfig(iceServers));
-  const row = peersTable.insertRow();
-  row.insertCell().textContent = id;
-  row.insertCell();
-  row.insertCell();
-  row.insertCell();
-  row.insertCell();
-  const peer: Peer = { id, pc, row, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), steerSeq: 0 };
+  // Same color for the car and its card, so you can tell which card belongs to which car
+  const color = nextPeerColor();
+  const card = createPeerCard(peerList, id, color, DETAILS);
+  // Only the first MAX_RACERS phones get a car; later ones stay connected (card + log) without one.
+  // No moving up when a racer leaves – keeps it simple until there is a real race start.
+  const racer = countRacers() < MAX_RACERS;
+  const peer: Peer = { id, pc, card, color, racer, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), steerSeq: 0 };
   peers.set(id, peer);
   renderPeer(peer);
+  if (racer) view.addPlayer(id, color);
+  else log(`⚠️ Rennen voll (max. ${MAX_RACERS}) – ${id} schaut nur zu`);
   log(`[${id}] beigetreten`);
 
   pc.onicecandidate = ({ candidate }) => {
@@ -150,6 +124,10 @@ function addPeer(id: PeerId): void {
   };
   // The phone creates the DataChannel, the PC receives it here
   pc.ondatachannel = ({ channel }) => setupChannel(peer, channel);
+}
+
+function countRacers(): number {
+  return [...peers.values()].filter((peer) => peer.racer).length;
 }
 
 function setupChannel(peer: Peer, channel: RTCDataChannel): void {
@@ -176,14 +154,16 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
         break;
       case 'hello':
         log(`[${peer.id}] 💬 ${msg.text}`);
-        peer.row.classList.remove('flash');
-        void peer.row.offsetWidth; // restart the animation
-        peer.row.classList.add('flash');
+        peer.card.root.classList.remove('flash');
+        void peer.card.root.offsetWidth; // restart the animation
+        peer.card.root.classList.add('flash');
         break;
       case 'steer':
         if (msg.seq > peer.steerSeq) {
           peer.steerSeq = msg.seq;
           peer.steerValue = msg.value;
+          // Spectators have no car – the view ignores unknown IDs
+          view.updateSteering(peer.id, msg.value);
           renderPeer(peer);
         }
         break;
@@ -198,11 +178,12 @@ async function refreshPath(peer: Peer): Promise<void> {
 }
 
 function renderPeer(peer: Peer): void {
-  const [, state, path, steerValue, rtt] = peer.row.cells;
+  const { state, rtt, details } = peer.card;
   state.textContent = peer.pc.connectionState;
-  path.textContent = peer.path ?? '–';
-  steerValue.textContent = peer.steerValue?.toFixed(2) ?? 'nA';
-  rtt.textContent = peer.rttMs === undefined ? '–' : `${peer.rttMs.toFixed(1)} ms`;
+  details.Weg.textContent = peer.path ?? '–';
+  details.Lenkwert.textContent = peer.racer ? (peer.steerValue?.toFixed(2) ?? 'nA') : 'Zuschauer';
+  // Empty until the first pong → CSS hides it together with its "·" separator (.peer-rtt:empty)
+  rtt.textContent = peer.rttMs === undefined ? '' : `${peer.rttMs.toFixed(1)} ms`;
 }
 
 function removePeer(id: PeerId): void {
@@ -210,16 +191,45 @@ function removePeer(id: PeerId): void {
   if (!peer) return;
   window.clearInterval(peer.pingTimer);
   peer.pc.close();
-  peer.row.remove();
+  peer.card.root.remove();
+  if (peer.racer) view.removePlayer(id);
   peers.delete(id);
   log(`[${id}] hat den Raum verlassen`);
 }
 
-// Fixed width: the canvas is not in the page yet, so it has no clientWidth to read
-function createSessionQrCode(canvas: HTMLCanvasElement, lobbyURL: string) {
-  QRCode.toCanvas(canvas, lobbyURL, { width: QR_CODE_SIZE, margin: 2 }).catch((err: unknown) =>
-    log(`❌ QR-Code konnte nicht erzeugt werden: ${String(err)}`),
-  );
+// Dev-only test buttons: add/remove fake players without real phones, to check the split screen.
+// They only talk to the view – no WebRTC, no peer card.
+function addTestButtons(): void {
+  const testIds: PeerId[] = [];
+  let nextTestId = 1;
+
+  const addButton = document.createElement('button');
+  addButton.textContent = '+ Test-Spieler';
+  addButton.addEventListener('click', () => {
+    // The view ignores players beyond MAX_RACERS – don't keep IDs that the "−" button could then "remove"
+    if (testIds.length >= MAX_RACERS) return;
+    const id = `test-${nextTestId++}`;
+    testIds.push(id);
+    view.addPlayer(id, nextPeerColor());
+    // Random steering value, so the turned front wheels are visible
+    view.updateSteering(id, Math.random() * 2 - 1);
+  });
+
+  const removeButton = document.createElement('button');
+  removeButton.textContent = '− Test-Spieler';
+  removeButton.addEventListener('click', () => {
+    // Removes a random one, so moving up after removing from the middle gets tested too
+    const [id] = testIds.splice(Math.floor(Math.random() * testIds.length), 1);
+    if (id != null) view.removePlayer(id);
+  });
+
+  const testBar = document.createElement('p');
+  testBar.className = 'test-buttons';
+  testBar.append(addButton, removeButton);
+  byId('race-view').before(testBar);
 }
+
+// import.meta.env.DEV is replaced by `false` in the production build, so the test buttons are stripped there.
+if (import.meta.env.DEV) addTestButtons();
 
 main().catch((err: unknown) => log(`❌ ${String(err)}`));

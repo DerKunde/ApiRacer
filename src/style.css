@@ -199,7 +199,8 @@ td {
   text-align: left;
 }
 
-tr.flash {
+tr.flash,
+.peer-card.flash {
   animation: flash 1s ease-out;
 }
 
@@ -589,7 +590,36 @@ button.big {
   overflow: hidden;
 }
 
-/* Connected phones: one card each (createPeerCard in host3dPhoneOrientation.ts) */
+/* Race view on the host: 16:9 like a TV, split into up to 4 views inside the one canvas (threeRaceView.ts).
+   position: relative → anchor for the "waiting for players" overlay */
+#race-view {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+#race-view canvas {
+  display: block;
+}
+
+.race-overlay {
+  position: absolute;
+  inset: auto 0 16px;
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* display rules elsewhere would beat the hidden attribute's display: none */
+.race-overlay[hidden] {
+  display: none;
+}
+
+/* Connected phones: one card each (createPeerCard in hostDashboard.ts) */
 .peer-list {
   list-style: none;
   padding: 0;
