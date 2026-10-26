@@ -295,12 +295,86 @@ button.big {
   font-size: 1.2rem;
 }
 
-/* Race controller: brake left, gas right – in landscape each thumb gets its own half of the screen */
-.pedals {
+/* Race controller: brake left, gas right, ready button in between – in landscape each thumb gets its own side */
+.race-controls {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr minmax(0, 14rem) 1fr;
   gap: 16px;
   margin: 16px 0;
+}
+
+.race-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.race-center .status {
+  margin: 0;
+  font-size: 1rem;
+}
+
+/* Small text button, so it doesn't compete with the ready button */
+.debug-btn {
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+/* Open and close only exist in the race mode – before that the debug panel is part of the page anyway */
+#debug-open-btn,
+#debug-close-btn {
+  display: none;
+}
+
+/* Race mode, set by startSensors in controller.ts: the controls fill the screen, nothing else, no scrolling.
+   touch-action: none → no panning or pinch-zoom anywhere, even between the buttons */
+body[data-mode='race'] {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body[data-mode='race'] main > h1 {
+  display: none;
+}
+
+body[data-mode='race'] .race-controls {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  /* Notch and home indicator in landscape */
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  touch-action: none;
+}
+
+body[data-mode='race'] .pedal {
+  min-height: 0;
+}
+
+body[data-mode='race'] #debug-open-btn,
+body[data-mode='race'] #debug-close-btn {
+  display: block;
+}
+
+/* In race mode only visible as a scrollable overlay after tapping the debug button (class set in controller.ts) */
+body[data-mode='race'] .debug-panel {
+  display: none;
+}
+
+body[data-mode='race'] .debug-panel.open {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--bg);
 }
 
 /* Text in --bg: readable on the green/red in both themes (white is too weak on the light dark-mode colors) */
@@ -333,6 +407,11 @@ button.big {
   transform: scale(0.97);
 }
 
+/* aria-pressed is set by the click handler in controller.ts */
+.ready-btn[aria-pressed='true'] {
+  background: var(--ok);
+}
+
 /* Race controller: covers the whole page until the motion sensors are allowed – without them there is no steering.
    touch-action: none → swiping on it doesn't scroll the page underneath (a tap on the button still works) */
 .fullscreen-overlay {
@@ -363,29 +442,7 @@ button.big {
   margin: 0;
 }
 
-.join-form {
-  display: flex;
-  gap: 8px;
-  align-items: end;
-  flex-wrap: wrap;
-}
-
-/* display: flex above would beat the hidden attribute's display: none */
-.join-form[hidden] {
-  display: none;
-}
-
-.join-form input {
-  display: block;
-  font: inherit;
-  font-size: 1.5rem;
-  width: 6em;
-  padding: 6px 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-}
-
-/* 3D phone page: room code field and join button in one row, same height (stretch) */
+/* Phone pages (3D phone, race controller): room code field and join button in one row, same height (stretch) */
 .join-row {
   display: flex;
   align-items: stretch;
@@ -838,6 +895,15 @@ button.big {
 }
 
 /* Dev-only buttons above the 3D view (host3dPhoneOrientation.ts) */
+/* Race host: start button with the ready count next to it */
+.race-start {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
 .test-buttons {
   display: flex;
   gap: 8px;

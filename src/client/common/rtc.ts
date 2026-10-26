@@ -10,6 +10,9 @@ export const CONTROL_CHANNEL_LABEL = 'control';
  */
 export const CONTROL_CHANNEL_OPTIONS: RTCDataChannelInit = { ordered: false, maxRetransmits: 0 };
 
+export const RELIABLE_CHANNEL_LABEL = 'reliable';
+export const RELIABLE_CHANNEL_OPTIONS: RTCDataChannelInit = { ordered: true, maxRetransmits: undefined };
+
 /**
  * Builds the `RTCConfiguration` for a new `RTCPeerConnection` from the available ICE servers:
  * - STUN (own coturn) is always included – tells each device its public address for hole punching.

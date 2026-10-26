@@ -18,6 +18,11 @@
 
       <section class="dashboard-view">
         <h2>Rennen</h2>
+        <!-- Enabled by updateStartButton in host.ts once every racer is ready -->
+        <p class="race-start">
+          <button type="button" id="start-btn" disabled>Rennen starten</button>
+          <span id="ready-count">Warte auf Fahrer …</span>
+        </p>
         <div id="race-view"></div>
       </section>
 

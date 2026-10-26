@@ -5,6 +5,8 @@ import {
   candidateType,
   CONTROL_CHANNEL_LABEL,
   CONTROL_CHANNEL_OPTIONS,
+  RELIABLE_CHANNEL_LABEL,
+  RELIABLE_CHANNEL_OPTIONS,
   createQueue,
   createRtcConfig,
   describePath,
@@ -28,8 +30,10 @@ import {
 const log = createLogger(byId('log'));
 const statusEl = byId('status');
 // Visible while not in a room: no code in the URL, joining failed, or the host closed the room
-const joinForm = byId<HTMLFormElement>('join-form');
+const joinScreen = byId('join-screen');
+const session = byId('session');
 const helloButton = byId<HTMLButtonElement>('hello-btn');
+const readyButton = byId<HTMLButtonElement>('ready-btn');
 const sensorOverlay = byId('sensor-overlay');
 const permissionButton = byId<HTMLButtonElement>('sensor-permission-btn');
 const alphaLabel = byId<HTMLElement>('orientation-alpha');
@@ -52,7 +56,10 @@ const enqueue = createQueue((err) => log(`❌ ${String(err)}`));
 let signaling: SignalingClient;
 let pc: RTCPeerConnection | undefined;
 let channel: RTCDataChannel | undefined;
+let reliableChannel: RTCDataChannel | undefined;
 let helloCount = 0;
+let joined = false;
+let ready = false;
 let holding: DeviceHolding = 'portrait';
 let steerValue = 0;
 let throttle = 0;
@@ -64,8 +71,24 @@ function setStatus(text: string): void {
   statusEl.textContent = text;
 }
 
+/**
+ * Back to the start: only the room code field is left, with the reason above it (empty = no reason).
+ * The sensors may still be starting up in the background – startSensors and initSensors check the session first.
+ */
+function showJoinScreen(message: string): void {
+  const messageEl = byId('join-message');
+  messageEl.textContent = message;
+  messageEl.hidden = message === '';
+  joinScreen.hidden = false;
+  session.hidden = true;
+  sensorOverlay.hidden = true;
+  setDebugPanelOpen(false);
+  delete document.body.dataset.mode;
+}
+
 async function main(roomId: string): Promise<void> {
-  byId('session').hidden = false;
+  joinScreen.hidden = true;
+  session.hidden = false;
   byId('room').textContent = roomId;
   // Not awaited: runs in parallel to the connection setup. Independent of WebRTC, so it starts before the check below.
   void initSensors();
@@ -94,6 +117,8 @@ async function initSensors(): Promise<void> {
     return;
   }
   if (needsOrientationPermission()) {
+    // Joining failed meanwhile → the join screen stays alone
+    if (session.hidden) return;
     // iOS without permission yet: requestPermission only works inside a tap → overlay with button
     sensorOverlay.hidden = false;
     return;
@@ -111,6 +136,10 @@ async function hasSensorData(): Promise<boolean> {
 
 function startSensors(): void {
   sensorOverlay.hidden = true;
+  readyButton.hidden = false;
+  // Race mode: only pedals and ready button fill the screen, the rest moves behind the debug button (style.css).
+  // Not if joining failed meanwhile – the fixed controls would cover the join screen.
+  if (!session.hidden) document.body.dataset.mode = 'race';
   window.addEventListener('deviceorientation', handleOrientation);
   window.addEventListener('devicemotion', handleMotion);
   log('Bewegungssensoren aktiv');
@@ -202,10 +231,10 @@ setupPedal(byId<HTMLButtonElement>('brake-btn'), (pressed) => (brake = pressed ?
 function handleServerMessage(msg: ServerMessage): void {
   switch (msg.type) {
     case 'joined':
-      joinForm.hidden = true;
+      joined = true;
       byId('peer-id').textContent = msg.peerId;
       log(`Raum beigetreten als ${msg.peerId}`);
-      startConnection(msg.iceServers);
+      startConnection(msg.roomId, msg.iceServers);
       break;
     case 'signal': {
       const { data } = msg;
@@ -216,27 +245,51 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case 'room-closed':
-      setStatus('Host hat den Raum geschlossen');
       pc?.close();
       helloButton.disabled = true;
+      readyButton.disabled = true;
       // Ready to join the next room
-      joinForm.hidden = false;
+      showJoinScreen('Host hat den Raum geschlossen');
       break;
     case 'error':
-      setStatus(`❌ ${msg.message}`);
+      // Before 'joined' the error is about joining (e.g. room not found) → back to the code field
+      if (joined) setStatus(`❌ ${msg.message}`);
+      else showJoinScreen(msg.message);
       break;
   }
 }
 
-function startConnection(iceServers?: IceServer[]): void {
+function startConnection(roomId: string, iceServers?: IceServer[]): void {
   setStatus('Baue WebRTC-Verbindung auf …');
   const connection = new RTCPeerConnection(createRtcConfig(iceServers));
   pc = connection;
 
   // Create the DataChannel before the offer so it gets negotiated in the SDP
+  reliableChannel = connection.createDataChannel(RELIABLE_CHANNEL_LABEL, RELIABLE_CHANNEL_OPTIONS);
+  reliableChannel.onopen = () => {
+    log('Zuverlässiger DataChannel offen');
+    readyButton.disabled = false;
+  };
+  reliableChannel.onclose = () => {
+    log('Zuverlässiger DataChannel geschlossen');
+    readyButton.disabled = true;
+  };
+  reliableChannel.onmessage = (e) => {
+    const msg = JSON.parse(e.data as string) as ChannelMessage;
+    if (msg.type === 'peer-color') {
+      byId('body').style.backgroundColor = msg.color;
+    }
+    // Lobby is over: changing your mind about being ready no longer matters
+    if (msg.type === 'race-start') {
+      readyButton.hidden = true;
+      setStatus('Rennen läuft');
+      log('🏁 Rennen gestartet');
+    }
+  };
+
   channel = connection.createDataChannel(CONTROL_CHANNEL_LABEL, CONTROL_CHANNEL_OPTIONS);
   channel.onopen = () => {
-    setStatus('✅ Verbunden (Peer-to-Peer)');
+    setStatus(`Verbunden zu ${roomId}`);
     helloButton.disabled = false;
     log('DataChannel offen');
     window.setInterval(() => void refreshPath(connection), 2000);
@@ -278,12 +331,27 @@ async function refreshPath(connection: RTCPeerConnection): Promise<void> {
   byId('path').textContent = path ? describePath(path) : '–';
 }
 
+readyButton.addEventListener('click', () => {
+  ready = !ready;
+  readyButton.setAttribute('aria-pressed', String(ready));
+  readyButton.textContent = ready ? '✅ Bereit – tippen zum Zurücknehmen' : 'Bereit';
+  sendMessage(reliableChannel, { type: 'ready', ready });
+});
+
+function setDebugPanelOpen(open: boolean): void {
+  byId('debug-panel').classList.toggle('open', open);
+  byId('debug-open-btn').setAttribute('aria-expanded', String(open));
+}
+
+byId('debug-open-btn').addEventListener('click', () => setDebugPanelOpen(true));
+byId('debug-close-btn').addEventListener('click', () => setDebugPanelOpen(false));
+
 helloButton.addEventListener('click', () => {
   sendMessage(channel, { type: 'hello', text: `Hallo #${++helloCount} vom Handy 👋` });
 });
 
 // Submitting reloads the page with ?room=… → the same path as opening a QR link
-joinForm.addEventListener('submit', (e) => {
+byId<HTMLFormElement>('join-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const code = byId<HTMLInputElement>('room-input').value.trim().toUpperCase();
   if (code) location.search = `?room=${encodeURIComponent(code)}`;
@@ -292,7 +360,7 @@ joinForm.addEventListener('submit', (e) => {
 const roomId = new URLSearchParams(location.search).get('room')?.trim().toUpperCase();
 if (roomId) {
   main(roomId).catch((err: unknown) => {
-    setStatus('❌ Verbindung fehlgeschlagen');
+    showJoinScreen('Verbindung zum Server fehlgeschlagen');
     log(String(err));
   });
 }

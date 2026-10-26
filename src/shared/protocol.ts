@@ -66,4 +66,8 @@ export type ChannelMessage =
   // steering: -1 = full left, +1 = full right. throttle/brake: 0 = released .. 1 = fully pressed (buttons send 0 or 1).
   | { type: 'input'; seq: number; steering: number; throttle: number; brake: number }
   | { type: 'orientation'; seq: number; quaternion: [x: number, y: number, z: number, w: number]; absolute: boolean }
-  | { type: 'peer-color'; color: string };
+  | { type: 'peer-color'; color: string }
+  // Lobby, over the reliable channel: no seq needed – nothing gets lost, and the order stays as sent.
+  // ready: phone → PC, toggled by the ready button. race-start: PC → all phones, once every racer is ready.
+  | { type: 'ready'; ready: boolean }
+  | { type: 'race-start' };
