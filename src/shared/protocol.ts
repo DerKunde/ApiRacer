@@ -61,9 +61,9 @@ export type ChannelMessage =
   | { type: 'ping'; t: number }
   | { type: 'pong'; t: number }
   | { type: 'hello'; text: string }
-  // message type related to user/client steering input.
-  // 'seq' counts up every message so late messages don't overrule newer ones, 'value' is the payload/steering input.
-  // (-1 = full left, +1 = full right).
-  | { type: 'steer'; seq: number; value: number }
+  // Race controller input, the full state in every message (the channel drops lost messages instead of resending).
+  // 'seq' counts up every message so late messages don't overrule newer ones.
+  // steering: -1 = full left, +1 = full right. throttle/brake: 0 = released .. 1 = fully pressed (buttons send 0 or 1).
+  | { type: 'input'; seq: number; steering: number; throttle: number; brake: number }
   | { type: 'orientation'; seq: number; quaternion: [x: number, y: number, z: number, w: number]; absolute: boolean }
   | { type: 'peer-color'; color: string };

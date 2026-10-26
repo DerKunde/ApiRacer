@@ -295,11 +295,84 @@ button.big {
   font-size: 1.2rem;
 }
 
+/* Race controller: brake left, gas right – in landscape each thumb gets its own half of the screen */
+.pedals {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 16px 0;
+}
+
+/* Text in --bg: readable on the green/red in both themes (white is too weak on the light dark-mode colors) */
+.pedal {
+  min-height: 140px;
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: var(--bg);
+  opacity: 0.55;
+  transition: opacity 0.05s, transform 0.05s;
+  /* A thumb resting on the pedal must not scroll, zoom, select text or open the iOS long-press callout */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pedal-brake {
+  background: var(--error);
+}
+
+.pedal-gas {
+  background: var(--ok);
+}
+
+/* Set by setupPedal in controller.ts while a finger is on it – :active is unreliable with several fingers */
+.pedal.pressed {
+  opacity: 1;
+  transform: scale(0.97);
+}
+
+/* Race controller: covers the whole page until the motion sensors are allowed – without them there is no steering.
+   touch-action: none → swiping on it doesn't scroll the page underneath (a tap on the button still works) */
+.fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px 16px;
+  text-align: center;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  touch-action: none;
+}
+
+/* display: flex above would beat the hidden attribute's display: none */
+.fullscreen-overlay[hidden] {
+  display: none;
+}
+
+/* Narrower than the page, so the text lines and the button stay a comfortable width in landscape */
+.fullscreen-overlay > * {
+  max-width: 28rem;
+  margin: 0;
+}
+
 .join-form {
   display: flex;
   gap: 8px;
   align-items: end;
   flex-wrap: wrap;
+}
+
+/* display: flex above would beat the hidden attribute's display: none */
+.join-form[hidden] {
+  display: none;
 }
 
 .join-form input {

@@ -118,7 +118,7 @@ Type-checks client and server and writes the static pages to `dist/`. The produc
 | `host3dPhoneOrientation.html` | PC     | 3D view of all connected phones                            |
 | `phone3dClient.html`          | Phone  | Sends the phone's rotation                                 |
 | `host.html`                   | PC     | Steering wheel demo: connection path, ping, steering value |
-| `controller.html`             | Phone  | Sends the steering value                                   |
+| `controller.html`             | Phone  | Sends the steering value, gas and brake                    |
 | `sensors.html`                | Phone  | Checks which orientation/motion APIs the device supports   |
 
 The start page `index.html` links all of them. The phone pages are opened via the QR code, so you don't need to type the room code or link.
@@ -162,8 +162,8 @@ src/
 
 | File                                                     | Purpose                                                                                         |
 | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| [host.ts](src/client/race/host.ts)                       | PC: connection path, ping and steering value per phone, split screen race view                  |
-| [controller.ts](src/client/race/controller.ts)           | Phone: tilt to steering value at 60 Hz                                                          |
+| [host.ts](src/client/race/host.ts)                       | PC: connection path, ping, steering, gas and brake per phone, split screen race view            |
+| [controller.ts](src/client/race/controller.ts)           | Phone: tilt to steering value, gas and brake buttons, sent together at 60 Hz                    |
 | [steering.ts](src/client/race/steering.ts)               | Steering logic: how the phone is held (gravity), tilt → steering value                          |
 | [raceView.ts](src/client/race/raceView.ts)               | Interface for the race view (`addPlayer` / `updateSteering` / `removePlayer`), `MAX_RACERS`     |
 | [threeRaceView.ts](src/client/race/threeRaceView.ts)     | three.js implementation of the `RaceView` interface: one scene, one chase camera per player     |

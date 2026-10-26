@@ -8,8 +8,7 @@
   <body>
     <main>
       <h1>📱 ApiRacer Controller</h1>
-      
-      <button id="gyroPermissionButton">Device Gyro Permission</button>
+
       <form id="join-form" class="join-form">
         <label>
           Raumcode
@@ -20,6 +19,11 @@
 
       <section id="session" hidden>
         <p class="status" id="status">…</p>
+        <!-- Brake left, gas right: held in landscape, each thumb rests on its own half. Pressed while a finger is on it (setupPedal in controller.ts) -->
+        <div class="pedals">
+          <button type="button" id="brake-btn" class="pedal pedal-brake">Bremse</button>
+          <button type="button" id="gas-btn" class="pedal pedal-gas">Gas</button>
+        </div>
         <dl>
           <dt>Raum</dt><dd id="room">–</dd>
           <dt>Peer-ID</dt><dd id="peer-id">–</dd>
@@ -39,6 +43,15 @@
         <ol id="log" class="log"></ol>
       </section>
     </main>
+
+    <!-- Only when the sensors have to be allowed first (iOS), shown by initSensors in controller.ts.
+         iOS only shows the permission prompt after a tap, so this has to be a button. -->
+    <div class="fullscreen-overlay" id="sensor-overlay" role="dialog" aria-modal="true" aria-labelledby="sensor-overlay-title" hidden>
+      <h2 id="sensor-overlay-title">Bewegungssensoren freigeben</h2>
+      <p>Du lenkst, indem du das Handy neigst. Dafür braucht die Seite Zugriff auf die Bewegungssensoren.</p>
+      <button id="sensor-permission-btn" class="big">Sensoren freigeben</button>
+      <p class="hint" id="sensor-hint" hidden></p>
+    </div>
     <script type="module" src="/src/client/race/controller.ts"></script>
   </body>
 </html>

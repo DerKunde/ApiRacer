@@ -18,7 +18,7 @@ import { ThreeRaceView } from './threeRaceView';
 /** Host = PC. Accepts an offer from every phone and keeps one PeerConnection per phone. */
 
 // Peer card rows, in display order
-const DETAILS = ['Weg', 'Lenkwert'] as const;
+const DETAILS = ['Weg', 'Lenkwert', 'Gas', 'Bremse'] as const;
 
 interface Peer {
   id: PeerId;
@@ -32,8 +32,10 @@ interface Peer {
   rttMs?: number;
   path?: string;
   pingTimer?: number;
-  steerSeq: number;
+  inputSeq: number;
   steerValue?: number;
+  throttle?: number;
+  brake?: number;
 }
 
 const log = createLogger(byId('log'));
@@ -106,7 +108,7 @@ function addPeer(id: PeerId): void {
   // Only the first MAX_RACERS phones get a car; later ones stay connected (card + log) without one.
   // No moving up when a racer leaves – keeps it simple until there is a real race start.
   const racer = countRacers() < MAX_RACERS;
-  const peer: Peer = { id, pc, card, color, racer, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), steerSeq: 0 };
+  const peer: Peer = { id, pc, card, color, racer, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), inputSeq: 0 };
   peers.set(id, peer);
   renderPeer(peer);
   if (racer) view.addPlayer(id, color);
@@ -158,12 +160,14 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
         void peer.card.root.offsetWidth; // restart the animation
         peer.card.root.classList.add('flash');
         break;
-      case 'steer':
-        if (msg.seq > peer.steerSeq) {
-          peer.steerSeq = msg.seq;
-          peer.steerValue = msg.value;
+      case 'input':
+        if (msg.seq > peer.inputSeq) {
+          peer.inputSeq = msg.seq;
+          peer.steerValue = msg.steering;
+          peer.throttle = msg.throttle;
+          peer.brake = msg.brake;
           // Spectators have no car – the view ignores unknown IDs
-          view.updateSteering(peer.id, msg.value);
+          view.updateSteering(peer.id, msg.steering);
           renderPeer(peer);
         }
         break;
@@ -182,6 +186,8 @@ function renderPeer(peer: Peer): void {
   state.textContent = peer.pc.connectionState;
   details.Weg.textContent = peer.path ?? '–';
   details.Lenkwert.textContent = peer.racer ? (peer.steerValue?.toFixed(2) ?? 'nA') : 'Zuschauer';
+  details.Gas.textContent = peer.racer ? (peer.throttle?.toFixed(2) ?? 'nA') : '–';
+  details.Bremse.textContent = peer.racer ? (peer.brake?.toFixed(2) ?? 'nA') : '–';
   // Empty until the first pong → CSS hides it together with its "·" separator (.peer-rtt:empty)
   rtt.textContent = peer.rttMs === undefined ? '' : `${peer.rttMs.toFixed(1)} ms`;
 }
