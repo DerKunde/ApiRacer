@@ -1,5 +1,5 @@
-import type { PeerId } from '../shared/protocol';
-import type { Quaternion } from './mobileDeviceSensors';
+import type { PeerId } from '../../shared/protocol';
+import type { Quaternion } from '../common/mobileDeviceSensors';
 
 export interface OrientationView {
     // color: any CSS color string – chosen by the host, so the peer card on the page can use the same color

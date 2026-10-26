@@ -1,5 +1,5 @@
-import '../style.css';
-import { HOST_ID, type ChannelMessage, type ServerMessage, type IceServer } from '../shared/protocol';
+import '../../style.css';
+import { HOST_ID, type ChannelMessage, type ServerMessage, type IceServer } from '../../shared/protocol';
 import {
   applySignal,
   candidateType,
@@ -10,16 +10,16 @@ import {
   describePath,
   getConnectionPath,
   sendMessage,
-} from './rtc';
-import { SignalingClient } from './signaling';
-import { byId, createLogger, hasWebRtcSupport } from './ui';
+} from '../common/rtc';
+import { SignalingClient } from '../common/signaling';
+import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
 import {
   detectHolding,
   requestOrientationEventPermission,
   steeringAngle,
   steeringValue,
   type DeviceHolding,
-} from './orientation';
+} from './steering';
 
 /** Controller = phone. Initiates the connection to the host PC (creates the offer and the DataChannel). */
 

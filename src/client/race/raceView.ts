@@ -1,4 +1,4 @@
-import type { PeerId } from '../shared/protocol';
+import type { PeerId } from '../../shared/protocol';
 
 // Split screen with 2 × 2 viewports at most – further phones can join the room but get no car
 export const MAX_RACERS = 4;

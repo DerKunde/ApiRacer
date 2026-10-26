@@ -1,4 +1,4 @@
-import type { PeerId } from '../shared/protocol';
+import type { PeerId } from '../../shared/protocol';
 import QRCode from 'qrcode';
 
 /** UI pieces shared by both host pages (race host.ts and the 3D phone host). */

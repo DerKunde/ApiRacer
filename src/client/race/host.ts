@@ -1,5 +1,5 @@
-import '../style.css';
-import type { ChannelMessage, IceServer, PeerId, ServerMessage } from '../shared/protocol';
+import '../../style.css';
+import type { ChannelMessage, IceServer, PeerId, ServerMessage } from '../../shared/protocol';
 import {
   applySignal,
   candidateType,
@@ -8,10 +8,10 @@ import {
   describePath,
   getConnectionPath,
   sendMessage,
-} from './rtc';
-import { SignalingClient } from './signaling';
-import { byId, createLogger, hasWebRtcSupport } from './ui';
-import { buildJoinURLs, createJoinOption, createPeerCard, nextPeerColor, type PeerCard } from './hostDashboard';
+} from '../common/rtc';
+import { SignalingClient } from '../common/signaling';
+import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
+import { buildJoinURLs, createJoinOption, createPeerCard, nextPeerColor, type PeerCard } from '../common/hostDashboard';
 import { MAX_RACERS, type RaceView } from './raceView';
 import { ThreeRaceView } from './threeRaceView';
 

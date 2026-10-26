@@ -1,4 +1,4 @@
-import type { PeerId } from '../shared/protocol';
+import type { PeerId } from '../../shared/protocol';
 import { MAX_RACERS, type RaceView } from './raceView';
 import { splitScreenLayout, type Viewport } from './splitScreenLayout';
 import * as THREE from 'three';

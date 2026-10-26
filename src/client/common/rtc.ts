@@ -1,4 +1,4 @@
-import type { ChannelMessage, IceServer, SignalData } from '../shared/protocol';
+import type { ChannelMessage, IceServer, SignalData } from '../../shared/protocol';
 
 const STUN_SERVER = 'stun:relay.messy-desk-studio.de:3478';
 
