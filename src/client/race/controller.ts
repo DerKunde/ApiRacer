@@ -14,6 +14,7 @@ import {
 import { SignalingClient } from '../common/signaling';
 import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
 import { needsOrientationPermission, waitForSensorEvent } from '../common/mobileDeviceSensors';
+import { keepScreenOn } from '../common/wakeLock';
 import {
   detectHolding,
   requestOrientationEventPermission,
@@ -68,6 +69,8 @@ async function main(roomId: string): Promise<void> {
   byId('room').textContent = roomId;
   // Not awaited: runs in parallel to the connection setup. Independent of WebRTC, so it starts before the check below.
   void initSensors();
+  // Chrome grants it right away, Safari only on the next tap (handled inside)
+  keepScreenOn(log);
 
   if (!hasWebRtcSupport()) {
     setStatus('❌ Kein WebRTC verfügbar');
