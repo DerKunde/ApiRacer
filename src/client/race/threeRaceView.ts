@@ -4,8 +4,8 @@ import { splitScreenLayout, type Viewport } from './splitScreenLayout';
 import * as THREE from 'three';
 
 // Scene units = meters. Oval track: a ring stretched along x. Centerline radius 22, road 8 wide.
-const TRACK_INNER_RADIUS = 18;
-const TRACK_OUTER_RADIUS = 26;
+const TRACK_INNER_RADIUS = 24;
+const TRACK_OUTER_RADIUS = 40;
 const TRACK_STRETCH_X = 1.6;
 // Start straight = the part of the ring closest to the viewer (+z); cars face −x
 const START_Z = (TRACK_INNER_RADIUS + TRACK_OUTER_RADIUS) / 2;
