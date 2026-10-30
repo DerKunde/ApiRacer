@@ -911,6 +911,7 @@ body[data-mode='race'] .debug-panel.open {
 }
 
 .peer-card .test-buttons {
+  align-items: center;
   margin: 8px 0 0;
 }
 

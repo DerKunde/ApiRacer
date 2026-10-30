@@ -291,19 +291,40 @@ function removePeer(id: PeerId): void {
 // Dev-only test players: test the lobby and the race without real phones. They are normal entries in peers, only
 // without a connection, so the host treats them like phones. The buttons on their card replace the phone.
 function addTestButtons(): void {
-  const testPeers = new Set<Peer>();
+  // The test player that WASD drives
+  let controlled: Peer | undefined;
   let nextTestId = 1;
+
+  const takeControl = (peer: Peer): void => {
+    // Release the pedals of the previous one, or it would keep driving with the last input
+    if (controlled) applyInput(controlled, { steering: 0, throttle: 0, brake: 0 });
+    controlled = peer;
+    sendKeyboardInput();
+  };
 
   const addButton = document.createElement('button');
   addButton.textContent = '+ Test-Spieler';
   addButton.addEventListener('click', () => {
     const peer = createPeer(`test-${nextTestId++}`);
-    testPeers.add(peer);
 
     const controls = document.createElement('div');
     controls.className = 'test-buttons';
-    // Spectators can't get ready, same as on the host's count
+    // Spectators have no car to drive and can't get ready, same as on the host's count
     if (peer.racer) {
+      // Same name = the browser keeps only one of them checked
+      const controlRadio = document.createElement('input');
+      controlRadio.type = 'radio';
+      controlRadio.name = 'test-control';
+      controlRadio.addEventListener('change', () => takeControl(peer));
+      // First one is ready to drive right away
+      if (!controlled) {
+        controlRadio.checked = true;
+        takeControl(peer);
+      }
+      const controlLabel = document.createElement('label');
+      controlLabel.append(controlRadio, ' Steuern');
+      controls.append(controlLabel);
+
       const readyButton = document.createElement('button');
       readyButton.textContent = 'Bereit';
       readyButton.addEventListener('click', () => {
@@ -315,22 +336,22 @@ function addTestButtons(): void {
     const removeButton = document.createElement('button');
     removeButton.textContent = 'Entfernen';
     removeButton.addEventListener('click', () => {
-      testPeers.delete(peer);
+      if (controlled === peer) controlled = undefined;
       removePeer(peer.id);
     });
     controls.append(removeButton);
     peer.card.root.append(controls);
   });
 
-  // WASD drives all test players at once. KeyboardEvent.code = physical key, independent of layout and caps lock.
+  // KeyboardEvent.code = physical key, independent of layout and caps lock.
   const pressed = new Set<string>();
   const sendKeyboardInput = (): void => {
-    const input = {
+    if (!controlled) return;
+    applyInput(controlled, {
       steering: Number(pressed.has('KeyD')) - Number(pressed.has('KeyA')),
       throttle: Number(pressed.has('KeyW')),
       brake: Number(pressed.has('KeyS')),
-    };
-    for (const peer of testPeers) applyInput(peer, input);
+    });
   };
   window.addEventListener('keydown', (e) => {
     pressed.add(e.code);
