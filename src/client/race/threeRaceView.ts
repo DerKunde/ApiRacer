@@ -1,4 +1,5 @@
 import type { PeerId } from '../../shared/protocol';
+import { WHEEL_POSITIONS, WHEEL_RADIUS, type CarPhysics } from './carPhysics';
 import { RacePhysics } from './racePhysics';
 import { MAX_RACERS, type RaceView } from './raceView';
 import { splitScreenLayout, type Viewport } from './splitScreenLayout';
@@ -43,7 +44,11 @@ export function startGridPose(slot: number): { x: number; z: number; heading: nu
 
 interface Car {
     root: THREE.Group;
-    // Pivot groups of the two front wheels – rotating them around y turns the wheels
+    // Owns the pose: root is copied from it every frame
+    body: CarPhysics;
+    // Pivot groups of all wheels, in the order of WHEEL_POSITIONS – moving them along y follows the suspension
+    wheels: THREE.Group[];
+    // The front ones among them – rotating them around y turns the wheels
     frontWheels: THREE.Group[];
     camera: THREE.PerspectiveCamera;
     steering: number;
@@ -113,6 +118,7 @@ export class ThreeRaceView implements RaceView {
         const car = this.cars.get(id);
         if (car == null) return;
         this.disposeCar(car);
+        this.physics.removeCar(car.body);
         this.cars.delete(id);
         // The others move up: next viewport and next start slot
         this.placeCars();
@@ -128,6 +134,8 @@ export class ThreeRaceView implements RaceView {
         if (this.size.x === 0 || this.size.y === 0) return;
 
         for (const car of this.cars.values()) {
+            car.body.copyPoseTo(car.root);
+            car.wheels.forEach((wheel, i) => wheel.position.y = car.body.wheelHeights[i]);
             // Positive y rotation = counterclockwise seen from above = left → minus for "+1 = right"
             for (const wheel of car.frontWheels) wheel.rotation.y = -car.steering * MAX_WHEEL_ANGLE;
         }
@@ -211,20 +219,19 @@ export class ThreeRaceView implements RaceView {
         root.add(body, cabin);
 
         const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
-        const frontWheels: THREE.Group[] = [];
-        for (const x of [-0.95, 0.95]) {
-            for (const z of [-1.3, 1.3]) {
-                // Cylinder axis is y → turn it onto x so the wheel rolls forward
-                const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16), wheelMaterial);
-                wheel.rotation.z = Math.PI / 2;
-                // Own pivot group: steering rotates the pivot around y, the wheel keeps its own tilt inside it
-                const pivot = new THREE.Group();
-                pivot.position.set(x, 0.4, z);
-                pivot.add(wheel);
-                root.add(pivot);
-                if (z < 0) frontWheels.push(pivot);
-            }
-        }
+        const wheels = WHEEL_POSITIONS.map(({ x, z }) => {
+            // Cylinder axis is y → turn it onto x so the wheel rolls forward
+            const wheel = new THREE.Mesh(new THREE.CylinderGeometry(WHEEL_RADIUS, WHEEL_RADIUS, 0.3, 16), wheelMaterial);
+            wheel.rotation.z = Math.PI / 2;
+            // Own pivot group: steering rotates the pivot around y, the wheel keeps its own tilt inside it.
+            // Its height comes from the suspension every frame.
+            const pivot = new THREE.Group();
+            pivot.position.set(x, WHEEL_RADIUS, z);
+            pivot.add(wheel);
+            root.add(pivot);
+            return pivot;
+        });
+        const frontWheels = wheels.filter((_, i) => WHEEL_POSITIONS[i].z < 0);
 
         // Aspect is set per frame in renderView (depends on the viewport)
         const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 500);
@@ -234,7 +241,7 @@ export class ThreeRaceView implements RaceView {
         camera.rotation.x = -Math.atan2(CHASE_CAMERA_HEIGHT - 1, CHASE_CAMERA_DISTANCE + 4);
         root.add(camera);
 
-        return { root, frontWheels, camera, steering: 0 };
+        return { root, body: this.physics.addCar(), wheels, frontWheels, camera, steering: 0 };
     }
 
     // Slot = position in join order
@@ -242,8 +249,7 @@ export class ThreeRaceView implements RaceView {
         let slot = 0;
         for (const car of this.cars.values()) {
             const { x, z, heading } = startGridPose(slot);
-            car.root.position.set(x, 0, z);
-            car.root.rotation.y = heading;
+            car.body.place(x, z, heading);
             slot++;
         }
     }

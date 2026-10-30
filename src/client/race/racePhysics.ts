@@ -1,4 +1,5 @@
 import RAPIER from '@dimforge/rapier3d-compat';
+import { CarPhysics } from './carPhysics';
 
 // Physics always advances in steps of this size, whatever the frame rate – springs get unstable with a varying dt
 const FIXED_STEP = 1 / 120;
@@ -20,6 +21,7 @@ export class RacePhysics {
     private readonly world = new RAPIER.World(GRAVITY);
     // Frame time not yet simulated: less than one step, carried over to the next frame
     private accumulator = 0;
+    private readonly cars = new Set<CarPhysics>();
 
     constructor() {
         this.world.timestep = FIXED_STEP;
@@ -29,10 +31,22 @@ export class RacePhysics {
         );
     }
 
+    addCar(): CarPhysics {
+        const car = new CarPhysics(this.world);
+        this.cars.add(car);
+        return car;
+    }
+
+    removeCar(car: CarPhysics): void {
+        car.remove();
+        this.cars.delete(car);
+    }
+
     // dt: seconds since the last frame
     update(dt: number): void {
         this.accumulator += Math.min(dt, MAX_FRAME_TIME);
         while (this.accumulator >= FIXED_STEP) {
+            for (const car of this.cars) car.applyForces();
             this.world.step();
             this.accumulator -= FIXED_STEP;
         }
