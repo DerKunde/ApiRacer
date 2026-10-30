@@ -14,6 +14,7 @@ import {
 import { SignalingClient } from '../common/signaling';
 import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
 import { buildJoinURLs, createJoinOption, createPeerCard, nextPeerColor, type PeerCard } from '../common/hostDashboard';
+import { initPhysics } from './racePhysics';
 import { MAX_RACERS, type RaceView } from './raceView';
 import { ThreeRaceView } from './threeRaceView';
 
@@ -46,7 +47,8 @@ interface Peer {
 const log = createLogger(byId('log'));
 const peerList = byId<HTMLUListElement>('peers');
 const startButton = byId<HTMLButtonElement>('start-btn');
-const view: RaceView = new ThreeRaceView(byId('race-view'));
+// Created in main() once the physics engine is loaded – before signaling, so no phone can join without it
+let view: RaceView;
 
 // Page the phone opens via QR code / link
 const JOIN_PAGE = '/controller.html';
@@ -56,6 +58,9 @@ let iceServers: IceServer[] | undefined;
 let raceStarted = false;
 
 async function main(): Promise<void> {
+  await initPhysics();
+  view = new ThreeRaceView(byId('race-view'));
+
   if (!hasWebRtcSupport()) {
     log('❌ Dieser Browser unterstützt kein WebRTC');
     return;

@@ -1,4 +1,5 @@
 import type { PeerId } from '../../shared/protocol';
+import { RacePhysics } from './racePhysics';
 import { MAX_RACERS, type RaceView } from './raceView';
 import { splitScreenLayout, type Viewport } from './splitScreenLayout';
 import * as THREE from 'three';
@@ -61,6 +62,10 @@ export class ThreeRaceView implements RaceView {
     // Map keeps insertion order → join order = viewport order = start grid slot
     private readonly cars = new Map<PeerId, Car>();
 
+    private readonly physics = new RacePhysics();
+    // Time of the previous frame in ms, unset until the first frame
+    private lastFrameTime?: number;
+
     constructor(container: HTMLElement) {
         this.renderer.setSize(container.clientWidth, container.clientHeight);
         // Without the scissor test, every render() would clear the WHOLE canvas, not only its viewport
@@ -86,7 +91,7 @@ export class ThreeRaceView implements RaceView {
         this.overviewCamera.lookAt(0, 0, 0);
 
         new ResizeObserver(() => this.resize(container)).observe(container);
-        this.renderer.setAnimationLoop(() => this.render());
+        this.renderer.setAnimationLoop((time) => this.render(time));
     }
 
     addPlayer(id: PeerId, color: string): void {
@@ -113,7 +118,11 @@ export class ThreeRaceView implements RaceView {
         this.placeCars();
     }
 
-    private render(): void {
+    private render(time: number): void {
+        // Before the size check: a hidden view must not stop the race
+        this.physics.update((time - (this.lastFrameTime ?? time)) / 1000);
+        this.lastFrameTime = time;
+
         this.renderer.getSize(this.size);
         // Hidden container (0 × 0) would make the aspect NaN (0 / 0)
         if (this.size.x === 0 || this.size.y === 0) return;
