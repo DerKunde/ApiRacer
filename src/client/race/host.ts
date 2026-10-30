@@ -192,7 +192,7 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
           peer.throttle = msg.throttle;
           peer.brake = msg.brake;
           // Spectators have no car – the view ignores unknown IDs
-          view.updateSteering(peer.id, msg.steering);
+          view.updateInput(peer.id, { steering: msg.steering, throttle: msg.throttle, brake: msg.brake });
           renderPeer(peer);
         }
         break;
@@ -287,8 +287,6 @@ function addTestButtons(): void {
     const id = `test-${nextTestId++}`;
     testIds.push(id);
     view.addPlayer(id, nextPeerColor());
-    // Random steering value, so the turned front wheels are visible
-    view.updateSteering(id, Math.random() * 2 - 1);
   });
 
   const removeButton = document.createElement('button');

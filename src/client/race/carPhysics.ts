@@ -1,5 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
+import type { DriverInput } from './raceView';
 
 const CAR_MASS = 800;
 // Mass properties set by hand: derived from the collider, the center of mass would sit in the middle of the body
@@ -31,22 +32,45 @@ const REST_LENGTH = 0.65;
 const SPRING_STRENGTH = 13000;
 const DAMPING = 1100;
 
+// Front wheels at full steering input (±1)
+export const MAX_WHEEL_ANGLE = THREE.MathUtils.degToRad(30);
+// Grip limit per wheel = this × wheel load. The wheel load comes from the spring, so weight transfer changes the grip.
+const GRIP = 1.4;
+// Largest share of a wheel's slip speed its force may remove in one step, against a quarter of the car.
+// Below 1 a step can't overshoot, so the force doesn't flip its sign every step.
+const STABILITY_FRACTION = 0.4;
+// Forces per wheel, in N. Rear wheel drive: the car accelerates at about 4.5 m/s² at most.
+const DRIVE_FORCE = 1800;
+const REVERSE_FORCE = 800;
+const BRAKE_FORCE = 2000;
+const ROLLING_RESISTANCE = 0.015;
+// Below this forward speed (m/s) the brake pedal drives backwards
+const REVERSE_BELOW_SPEED = 1;
+// Air resistance F = coefficient × v². Together with the drive force this gives a top speed of about 24 m/s.
+const DRAG_COEFFICIENT = 6;
+
 // Temporary, to see the physics at work: cars are dropped tilted from above their start position
 const DROP_HEIGHT = 3;
 const DROP_TILT = 0.2;
 
-// Rigid body of one car with a raycast suspension. The view only reads the results, so it stays
+// Rigid body of one car with a raycast suspension and tire forces. The view only reads the results, so it stays
 // independent of Rapier.
 export class CarPhysics {
 
     // Height of each wheel center in car coordinates, for the wheel meshes. Fully extended until the first step.
     readonly wheelHeights = WHEEL_POSITIONS.map(() => STRUT_TOP_HEIGHT - REST_LENGTH);
+    // Set by the view, read every step
+    input: DriverInput = { steering: 0, throttle: 0, brake: 0 };
 
     private readonly world: RAPIER.World;
     private readonly body: RAPIER.RigidBody;
     // Reused for every wheel and step, only filled with new values
     private readonly up = new THREE.Vector3();
     private readonly strutTop = new THREE.Vector3();
+    private readonly contactPoint = new THREE.Vector3();
+    private readonly normal = new THREE.Vector3();
+    private readonly wheelForward = new THREE.Vector3();
+    private readonly wheelSide = new THREE.Vector3();
     private readonly rotation = new THREE.Quaternion();
     private readonly ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
 
@@ -86,19 +110,25 @@ export class CarPhysics {
 
         WHEEL_POSITIONS.forEach(({ x, z }, i) => {
             this.strutTop.set(x, STRUT_TOP_HEIGHT, z).applyQuaternion(this.rotation).add(position);
-            this.wheelHeights[i] = STRUT_TOP_HEIGHT - this.applySuspension();
+            this.wheelHeights[i] = STRUT_TOP_HEIGHT - this.applyWheelForces(z);
         });
+
+        // Against the direction of travel, not the car's forward: it has to brake a sliding car as well
+        const velocity = this.body.linvel();
+        const drag = -DRAG_COEFFICIENT * Math.hypot(velocity.x, velocity.y, velocity.z);
+        this.body.addForce({ x: velocity.x * drag, y: velocity.y * drag, z: velocity.z * drag }, true);
     }
 
-    // Spring and damper of one strut (top in this.strutTop). Returns the current strut length.
-    private applySuspension(): number {
+    // Spring, damper and tire of one wheel (strut top in this.strutTop). z: wheel position along the car, tells
+    // front from rear. Returns the current strut length.
+    private applyWheelForces(z: number): number {
         const { ray, up, strutTop } = this;
         ray.origin = strutTop;
         ray.dir = { x: -up.x, y: -up.y, z: -up.z };
 
         // Against every collider except this car's own. The ray ends where a fully extended wheel would touch.
         const hit = this.world.castRayAndGetNormal(ray, REST_LENGTH + WHEEL_RADIUS, true, undefined, undefined, undefined, this.body);
-        // No contact: the spring has nothing to push against. A strut that starts inside the ground (car
+        // No contact: neither spring nor tire has anything to push against. A strut that starts inside the ground (car
         // on its side) also hits, with a zero normal – without this check its full compression would shoot the car away.
         if (hit == null || up.dot(hit.normal) <= 0) return REST_LENGTH;
 
@@ -111,7 +141,51 @@ export class CarPhysics {
         const load = Math.max(0, compression * SPRING_STRENGTH - velocity * DAMPING);
         this.body.addForceAtPoint({ x: up.x * load, y: up.y * load, z: up.z * load }, strutTop, true);
 
+        this.contactPoint.copy(strutTop).addScaledVector(up, -hit.timeOfImpact);
+        this.normal.copy(hit.normal);
+        this.applyTireForce(load, z < 0);
         return length;
+    }
+
+    // Tire force at this.contactPoint: along and across the wheel, within the ground plane (this.normal), so it
+    // also works on a slope.
+    private applyTireForce(load: number, isFront: boolean): void {
+        const { contactPoint, normal, wheelForward, wheelSide } = this;
+
+        // Forward (−z) turned by the steering. Minus for "+1 = right", same as the wheel meshes in the view.
+        const wheelAngle = isFront ? -this.input.steering * MAX_WHEEL_ANGLE : 0;
+        wheelForward.set(-Math.sin(wheelAngle), 0, -Math.cos(wheelAngle)).applyQuaternion(this.rotation);
+        wheelForward.addScaledVector(normal, -wheelForward.dot(normal)).normalize();
+        wheelSide.crossVectors(wheelForward, normal);
+
+        const contactVelocity = this.body.velocityAtPoint(contactPoint);
+        const forwardSpeed = wheelForward.dot(contactVelocity);
+        const sideSpeed = wheelSide.dot(contactVelocity);
+
+        // Force that would remove STABILITY_FRACTION of a slip of 1 m/s within one step
+        const stoppingForce = STABILITY_FRACTION * (CAR_MASS / 4) / this.world.timestep;
+        const grip = GRIP * load;
+
+        // Drive and brake first: what they use of the grip is missing for cornering, so a wheel near its limit
+        // under drive or brake starts to slide sideways
+        const longitudinal = THREE.MathUtils.clamp(this.longitudinalForce(load, isFront, forwardSpeed, stoppingForce), -grip, grip);
+        const lateralLimit = Math.sqrt(grip * grip - longitudinal * longitudinal);
+        const lateral = THREE.MathUtils.clamp(-sideSpeed * stoppingForce, -lateralLimit, lateralLimit);
+
+        const force = wheelForward.multiplyScalar(longitudinal).addScaledVector(wheelSide, lateral);
+        this.body.addForceAtPoint(force, contactPoint, true);
+    }
+
+    private longitudinalForce(load: number, isFront: boolean, forwardSpeed: number, stoppingForce: number): number {
+        const { throttle, brake } = this.input;
+        const reversing = brake > 0 && throttle === 0 && forwardSpeed < REVERSE_BELOW_SPEED;
+
+        let drive = 0;
+        if (!isFront) drive = reversing ? -brake * REVERSE_FORCE : throttle * DRIVE_FORCE;
+
+        // Brake and rolling resistance only slow the car down: capped so they stop it, but can't push it backwards
+        const resistance = (reversing ? 0 : brake * BRAKE_FORCE) + ROLLING_RESISTANCE * load;
+        return drive - Math.sign(forwardSpeed) * Math.min(resistance, Math.abs(forwardSpeed) * stoppingForce);
     }
 
     copyPoseTo(target: THREE.Object3D): void {

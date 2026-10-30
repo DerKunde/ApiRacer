@@ -1,7 +1,7 @@
 import type { PeerId } from '../../shared/protocol';
-import { WHEEL_POSITIONS, WHEEL_RADIUS, type CarPhysics } from './carPhysics';
+import { MAX_WHEEL_ANGLE, WHEEL_POSITIONS, WHEEL_RADIUS, type CarPhysics } from './carPhysics';
 import { RacePhysics } from './racePhysics';
-import { MAX_RACERS, type RaceView } from './raceView';
+import { MAX_RACERS, type DriverInput, type RaceView } from './raceView';
 import { splitScreenLayout, type Viewport } from './splitScreenLayout';
 import * as THREE from 'three';
 
@@ -11,8 +11,6 @@ const TRACK_OUTER_RADIUS = 40;
 const TRACK_STRETCH_X = 1.6;
 // Start straight = the part of the ring closest to the viewer (+z); cars face −x
 const START_Z = (TRACK_INNER_RADIUS + TRACK_OUTER_RADIUS) / 2;
-// Front wheels at full steering input (±1)
-const MAX_WHEEL_ANGLE = THREE.MathUtils.degToRad(30);
 // Chase camera relative to its car: behind (+z = backwards, the car faces −z) and above
 const CHASE_CAMERA_HEIGHT = 3;
 const CHASE_CAMERA_DISTANCE = 7;
@@ -51,7 +49,6 @@ interface Car {
     // The front ones among them – rotating them around y turns the wheels
     frontWheels: THREE.Group[];
     camera: THREE.PerspectiveCamera;
-    steering: number;
 }
 
 export class ThreeRaceView implements RaceView {
@@ -108,10 +105,10 @@ export class ThreeRaceView implements RaceView {
         this.placeCars();
     }
 
-    // Only stores the value – the render loop applies it, so 60 messages/s don't each touch the scene
-    updateSteering(id: PeerId, value: number): void {
+    // Only stores the values – physics and render loop read them, so 60 messages/s don't each touch the scene
+    updateInput(id: PeerId, input: DriverInput): void {
         const car = this.cars.get(id);
-        if (car != null) car.steering = value;
+        if (car != null) car.body.input = input;
     }
 
     removePlayer(id: PeerId): void {
@@ -137,7 +134,7 @@ export class ThreeRaceView implements RaceView {
             car.body.copyPoseTo(car.root);
             car.wheels.forEach((wheel, i) => wheel.position.y = car.body.wheelHeights[i]);
             // Positive y rotation = counterclockwise seen from above = left → minus for "+1 = right"
-            for (const wheel of car.frontWheels) wheel.rotation.y = -car.steering * MAX_WHEEL_ANGLE;
+            for (const wheel of car.frontWheels) wheel.rotation.y = -car.body.input.steering * MAX_WHEEL_ANGLE;
         }
 
         // Clear the whole canvas in the divider color first; the views below leave a DIVIDER gap around them
@@ -241,7 +238,7 @@ export class ThreeRaceView implements RaceView {
         camera.rotation.x = -Math.atan2(CHASE_CAMERA_HEIGHT - 1, CHASE_CAMERA_DISTANCE + 4);
         root.add(camera);
 
-        return { root, body: this.physics.addCar(), wheels, frontWheels, camera, steering: 0 };
+        return { root, body: this.physics.addCar(), wheels, frontWheels, camera };
     }
 
     // Slot = position in join order
