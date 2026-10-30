@@ -297,6 +297,30 @@ function addTestButtons(): void {
     if (id != null) view.removePlayer(id);
   });
 
+  // WASD drives all test players at once. KeyboardEvent.code = physical key, independent of layout and caps lock.
+  const pressed = new Set<string>();
+  const sendKeyboardInput = (): void => {
+    const input = {
+      steering: Number(pressed.has('KeyD')) - Number(pressed.has('KeyA')),
+      throttle: Number(pressed.has('KeyW')),
+      brake: Number(pressed.has('KeyS')),
+    };
+    for (const id of testIds) view.updateInput(id, input);
+  };
+  window.addEventListener('keydown', (e) => {
+    pressed.add(e.code);
+    sendKeyboardInput();
+  });
+  window.addEventListener('keyup', (e) => {
+    pressed.delete(e.code);
+    sendKeyboardInput();
+  });
+  // The keyup never arrives when the window loses focus while a key is held – the car would keep driving
+  window.addEventListener('blur', () => {
+    pressed.clear();
+    sendKeyboardInput();
+  });
+
   const testBar = document.createElement('p');
   testBar.className = 'test-buttons';
   testBar.append(addButton, removeButton);
