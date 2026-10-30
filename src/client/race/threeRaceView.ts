@@ -12,8 +12,15 @@ const TRACK_STRETCH_X = 1.6;
 // Start straight = the part of the ring closest to the viewer (+z); cars face −x
 const START_Z = (TRACK_INNER_RADIUS + TRACK_OUTER_RADIUS) / 2;
 // Chase camera relative to its car: behind (+z = backwards, the car faces −z) and above
-const CHASE_CAMERA_HEIGHT = 3;
+const CHASE_CAMERA_HEIGHT = 4.5;
 const CHASE_CAMERA_DISTANCE = 7;
+// The camera looks at a point this far in front of the car at roof height (y = 1). Further = car lower in the image.
+const CHASE_CAMERA_LOOK_AHEAD = 8;
+// Share of the car's roll the camera takes over
+const CHASE_CAMERA_ROLL_FOLLOW = 0.25;
+// How fast the camera catches up with the car's pitch and roll (higher = faster, in 1/s). Slow enough to filter the
+// suspension wobble; pitch still follows fully, so the camera will tilt with a sloped track.
+const CHASE_CAMERA_SMOOTHING = 4;
 // Start grid: distance of each lane from the centerline, and between rows. Row spacing must be larger than the
 // chase camera distance, or the car behind sits right in front of the camera and fills the view.
 const GRID_LANE_OFFSET = 2.5;
@@ -49,6 +56,11 @@ interface Car {
     // The front ones among them – rotating them around y turns the wheels
     frontWheels: THREE.Group[];
     camera: THREE.PerspectiveCamera;
+    // Parent of the camera, in the scene instead of in root: follows the car's position and yaw directly,
+    // but only the smoothed pitch and roll below
+    cameraRig: THREE.Group;
+    cameraPitch: number;
+    cameraRoll: number;
 }
 
 export class ThreeRaceView implements RaceView {
@@ -60,6 +72,8 @@ export class ThreeRaceView implements RaceView {
     private readonly dividerColor: THREE.Color;
     // Canvas size in CSS pixels, reused every frame instead of allocating a new Vector2
     private readonly size = new THREE.Vector2();
+    // Car rotation split into angles, reused every frame. YXZ = yaw first, so pitch and roll are the car's own.
+    private readonly carAngles = new THREE.Euler(0, 0, 0, 'YXZ');
 
     // Map keeps insertion order → join order = viewport order = start grid slot
     private readonly cars = new Map<PeerId, Car>();
@@ -101,7 +115,7 @@ export class ThreeRaceView implements RaceView {
         if (this.cars.has(id) || this.cars.size >= MAX_RACERS) return;
         const car = this.createCar(new THREE.Color(color));
         this.cars.set(id, car);
-        this.scene.add(car.root);
+        this.scene.add(car.root, car.cameraRig);
         this.placeCars();
     }
 
@@ -123,7 +137,8 @@ export class ThreeRaceView implements RaceView {
 
     private render(time: number): void {
         // Before the size check: a hidden view must not stop the race
-        this.physics.update((time - (this.lastFrameTime ?? time)) / 1000);
+        const dt = (time - (this.lastFrameTime ?? time)) / 1000;
+        this.physics.update(dt);
         this.lastFrameTime = time;
 
         this.renderer.getSize(this.size);
@@ -135,6 +150,7 @@ export class ThreeRaceView implements RaceView {
             car.wheels.forEach((wheel, i) => wheel.position.y = car.body.wheelHeights[i]);
             // Positive y rotation = counterclockwise seen from above = left → minus for "+1 = right"
             for (const wheel of car.frontWheels) wheel.rotation.y = -car.body.input.steering * MAX_WHEEL_ANGLE;
+            this.updateChaseCamera(car, dt);
         }
 
         // Clear the whole canvas in the divider color first; the views below leave a DIVIDER gap around them
@@ -148,6 +164,15 @@ export class ThreeRaceView implements RaceView {
         if (layout.overview) this.renderView(layout.overview, this.overviewCamera);
 
         this.overlay.hidden = this.cars.size > 0;
+    }
+
+    private updateChaseCamera(car: Car, dt: number): void {
+        this.carAngles.setFromQuaternion(car.root.quaternion);
+        // damp() instead of a fixed factor per frame: same camera behavior at any frame rate
+        car.cameraPitch = THREE.MathUtils.damp(car.cameraPitch, this.carAngles.x, CHASE_CAMERA_SMOOTHING, dt);
+        car.cameraRoll = THREE.MathUtils.damp(car.cameraRoll, this.carAngles.z * CHASE_CAMERA_ROLL_FOLLOW, CHASE_CAMERA_SMOOTHING, dt);
+        car.cameraRig.position.copy(car.root.position);
+        car.cameraRig.rotation.set(car.cameraPitch, this.carAngles.y, car.cameraRoll, 'YXZ');
     }
 
     // Draws the scene through one camera into one part of the canvas
@@ -199,7 +224,7 @@ export class ThreeRaceView implements RaceView {
         return track;
     }
 
-    // Car model: forward = −z (three.js convention, like cameras). Chase camera as a child → follows the car.
+    // Car model: forward = −z (three.js convention, like cameras)
     private createCar(color: THREE.Color): Car {
         const root = new THREE.Group();
 
@@ -233,12 +258,13 @@ export class ThreeRaceView implements RaceView {
         // Aspect is set per frame in renderView (depends on the viewport)
         const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 500);
         camera.position.set(0, CHASE_CAMERA_HEIGHT, CHASE_CAMERA_DISTANCE);
-        // Tilt down so the camera looks at a point 4 m in front of the car at roof height (y = 1).
-        // Set directly instead of lookAt(): lookAt expects world coordinates, the camera lives in the car's.
-        camera.rotation.x = -Math.atan2(CHASE_CAMERA_HEIGHT - 1, CHASE_CAMERA_DISTANCE + 4);
-        root.add(camera);
+        // Tilt down to the look-ahead point. Set directly instead of lookAt(): lookAt expects world coordinates,
+        // the camera lives in the rig's.
+        camera.rotation.x = -Math.atan2(CHASE_CAMERA_HEIGHT - 1, CHASE_CAMERA_DISTANCE + CHASE_CAMERA_LOOK_AHEAD);
+        const cameraRig = new THREE.Group();
+        cameraRig.add(camera);
 
-        return { root, body: this.physics.addCar(), wheels, frontWheels, camera };
+        return { root, body: this.physics.addCar(), wheels, frontWheels, camera, cameraRig, cameraPitch: 0, cameraRoll: 0 };
     }
 
     // Slot = position in join order
@@ -255,6 +281,7 @@ export class ThreeRaceView implements RaceView {
     // A Set collects each material once (the wheel material is shared by all four wheels).
     private disposeCar(car: Car): void {
         car.root.removeFromParent();
+        car.cameraRig.removeFromParent();
         const materials = new Set<THREE.Material>();
         car.root.traverse((obj) => {
             if (!(obj instanceof THREE.Mesh)) return;
