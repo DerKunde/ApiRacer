@@ -910,6 +910,10 @@ body[data-mode='race'] .debug-panel.open {
   margin: 0 0 12px;
 }
 
+.peer-card .test-buttons {
+  margin: 8px 0 0;
+}
+
 /* Canvas is inline by default → small gap below it */
 #orientation-view canvas {
   display: block;

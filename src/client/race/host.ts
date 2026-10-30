@@ -15,7 +15,7 @@ import { SignalingClient } from '../common/signaling';
 import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
 import { buildJoinURLs, createJoinOption, createPeerCard, nextPeerColor, type PeerCard } from '../common/hostDashboard';
 import { initPhysics } from './racePhysics';
-import { MAX_RACERS, type RaceView } from './raceView';
+import { MAX_RACERS, type DriverInput, type RaceView } from './raceView';
 import { ThreeRaceView } from './threeRaceView';
 
 /** Host = PC. Accepts an offer from every phone and keeps one PeerConnection per phone. */
@@ -25,7 +25,8 @@ const DETAILS = ['Weg', 'Bereit', 'Lenkwert', 'Gas', 'Bremse'] as const;
 
 interface Peer {
   id: PeerId;
-  pc: RTCPeerConnection;
+  // Missing for dev test players: they go through the same host logic, but have no phone behind them
+  pc?: RTCPeerConnection;
   channel?: RTCDataChannel;
   reliableChannel?: RTCDataChannel;
   enqueue: (task: () => Promise<void>) => void;
@@ -85,11 +86,12 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     case 'signal': {
       const peer = peers.get(msg.from);
-      if (!peer) return;
+      const pc = peer?.pc;
+      if (!peer || !pc) return;
       const { data } = msg;
       log(`[${peer.id}] empfangen: ${data.kind === 'description' ? data.description.type : `ICE-Kandidat (${candidateType(data.candidate.candidate)})`}`);
       peer.enqueue(async () => {
-        const reply = await applySignal(peer.pc, data);
+        const reply = await applySignal(pc, data);
         if (reply) {
           signaling.send({ type: 'signal', to: peer.id, data: reply });
           log(`[${peer.id}] Answer gesendet`);
@@ -112,8 +114,8 @@ function showRoom(roomId: string, lanAddresses: string[]): void {
   log(`Raum ${roomId} erstellt – warte auf Handys …`);
 }
 
-function addPeer(id: PeerId): void {
-  const pc = new RTCPeerConnection(createRtcConfig(iceServers));
+/** Everything a new player needs on the host, with or without a connection. */
+function createPeer(id: PeerId, pc?: RTCPeerConnection): Peer {
   // Same color for the car and its card, so you can tell which card belongs to which car
   const color = nextPeerColor();
   const card = createPeerCard(peerList, id, color, DETAILS);
@@ -128,6 +130,12 @@ function addPeer(id: PeerId): void {
   if (racer) view.addPlayer(id, color);
   else log(`⚠️ Rennen voll (max. ${MAX_RACERS}) – ${id} schaut nur zu`);
   log(`[${id}] beigetreten`);
+  return peer;
+}
+
+function addPeer(id: PeerId): void {
+  const pc = new RTCPeerConnection(createRtcConfig(iceServers));
+  const peer = createPeer(id, pc);
 
   pc.onicecandidate = ({ candidate }) => {
     if (!candidate) return;
@@ -188,16 +196,20 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
       case 'input':
         if (msg.seq > peer.inputSeq) {
           peer.inputSeq = msg.seq;
-          peer.steerValue = msg.steering;
-          peer.throttle = msg.throttle;
-          peer.brake = msg.brake;
-          // Spectators have no car – the view ignores unknown IDs
-          view.updateInput(peer.id, { steering: msg.steering, throttle: msg.throttle, brake: msg.brake });
-          renderPeer(peer);
+          applyInput(peer, { steering: msg.steering, throttle: msg.throttle, brake: msg.brake });
         }
         break;
     }
   };
+}
+
+function applyInput(peer: Peer, input: DriverInput): void {
+  peer.steerValue = input.steering;
+  peer.throttle = input.throttle;
+  peer.brake = input.brake;
+  // Spectators have no car – the view ignores unknown IDs
+  view.updateInput(peer.id, input);
+  renderPeer(peer);
 }
 
 function setupReliableChannel(peer: Peer, channel: RTCDataChannel): void {
@@ -210,13 +222,15 @@ function setupReliableChannel(peer: Peer, channel: RTCDataChannel): void {
   channel.onclose = () => log(`[${peer.id}] zuverlässiger DataChannel geschlossen`);
   channel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
-    if (msg.type === 'ready') {
-      peer.ready = msg.ready;
-      log(`[${peer.id}] ${msg.ready ? 'bereit' : 'nicht mehr bereit'}`);
-      renderPeer(peer);
-      updateStartButton();
-    }
+    if (msg.type === 'ready') setReady(peer, msg.ready);
   };
+}
+
+function setReady(peer: Peer, ready: boolean): void {
+  peer.ready = ready;
+  log(`[${peer.id}] ${ready ? 'bereit' : 'nicht mehr bereit'}`);
+  renderPeer(peer);
+  updateStartButton();
 }
 
 /** Racers that are ready and racers in total – spectators don't count, they have no car. */
@@ -243,6 +257,7 @@ startButton.addEventListener('click', () => {
 });
 
 async function refreshPath(peer: Peer): Promise<void> {
+  if (!peer.pc) return;
   const path = await getConnectionPath(peer.pc);
   peer.path = path ? describePath(path) : undefined;
   renderPeer(peer);
@@ -250,7 +265,7 @@ async function refreshPath(peer: Peer): Promise<void> {
 
 function renderPeer(peer: Peer): void {
   const { state, rtt, details } = peer.card;
-  state.textContent = peer.pc.connectionState;
+  state.textContent = peer.pc?.connectionState ?? 'Test-Spieler';
   details.Weg.textContent = peer.path ?? '–';
   details.Bereit.textContent = peer.racer ? (peer.ready ? 'ja' : 'nein') : '–';
   details.Lenkwert.textContent = peer.racer ? (peer.steerValue?.toFixed(2) ?? 'nA') : 'Zuschauer';
@@ -264,7 +279,7 @@ function removePeer(id: PeerId): void {
   const peer = peers.get(id);
   if (!peer) return;
   window.clearInterval(peer.pingTimer);
-  peer.pc.close();
+  peer.pc?.close();
   peer.card.root.remove();
   if (peer.racer) view.removePlayer(id);
   peers.delete(id);
@@ -273,28 +288,38 @@ function removePeer(id: PeerId): void {
   updateStartButton();
 }
 
-// Dev-only test buttons: add/remove fake players without real phones, to check the split screen.
-// They only talk to the view – no WebRTC, no peer card.
+// Dev-only test players: test the lobby and the race without real phones. They are normal entries in peers, only
+// without a connection, so the host treats them like phones. The buttons on their card replace the phone.
 function addTestButtons(): void {
-  const testIds: PeerId[] = [];
+  const testPeers = new Set<Peer>();
   let nextTestId = 1;
 
   const addButton = document.createElement('button');
   addButton.textContent = '+ Test-Spieler';
   addButton.addEventListener('click', () => {
-    // The view ignores players beyond MAX_RACERS – don't keep IDs that the "−" button could then "remove"
-    if (testIds.length >= MAX_RACERS) return;
-    const id = `test-${nextTestId++}`;
-    testIds.push(id);
-    view.addPlayer(id, nextPeerColor());
-  });
+    const peer = createPeer(`test-${nextTestId++}`);
+    testPeers.add(peer);
 
-  const removeButton = document.createElement('button');
-  removeButton.textContent = '− Test-Spieler';
-  removeButton.addEventListener('click', () => {
-    // Removes a random one, so moving up after removing from the middle gets tested too
-    const [id] = testIds.splice(Math.floor(Math.random() * testIds.length), 1);
-    if (id != null) view.removePlayer(id);
+    const controls = document.createElement('div');
+    controls.className = 'test-buttons';
+    // Spectators can't get ready, same as on the host's count
+    if (peer.racer) {
+      const readyButton = document.createElement('button');
+      readyButton.textContent = 'Bereit';
+      readyButton.addEventListener('click', () => {
+        setReady(peer, !peer.ready);
+        readyButton.textContent = peer.ready ? '✅ Bereit' : 'Bereit';
+      });
+      controls.append(readyButton);
+    }
+    const removeButton = document.createElement('button');
+    removeButton.textContent = 'Entfernen';
+    removeButton.addEventListener('click', () => {
+      testPeers.delete(peer);
+      removePeer(peer.id);
+    });
+    controls.append(removeButton);
+    peer.card.root.append(controls);
   });
 
   // WASD drives all test players at once. KeyboardEvent.code = physical key, independent of layout and caps lock.
@@ -305,7 +330,7 @@ function addTestButtons(): void {
       throttle: Number(pressed.has('KeyW')),
       brake: Number(pressed.has('KeyS')),
     };
-    for (const id of testIds) view.updateInput(id, input);
+    for (const peer of testPeers) applyInput(peer, input);
   };
   window.addEventListener('keydown', (e) => {
     pressed.add(e.code);
@@ -323,7 +348,7 @@ function addTestButtons(): void {
 
   const testBar = document.createElement('p');
   testBar.className = 'test-buttons';
-  testBar.append(addButton, removeButton);
+  testBar.append(addButton);
   byId('race-view').before(testBar);
 }
 
