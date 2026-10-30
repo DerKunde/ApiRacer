@@ -735,6 +735,44 @@ body[data-mode='race'] .debug-panel.open {
   display: block;
 }
 
+/* Dev only (trackEditor.ts): map and side panel in a row */
+.track-editor {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.track-editor #race-view {
+  flex: 1;
+  min-width: 0;
+}
+
+.track-editor-panel {
+  flex: none;
+  width: 220px;
+  display: grid;
+  gap: 8px;
+}
+
+.track-editor-panel[hidden],
+.track-editor-panel section[hidden] {
+  display: none;
+}
+
+.track-editor-panel h3,
+.track-editor-panel p {
+  margin: 0;
+}
+
+.track-editor-panel section {
+  display: grid;
+  gap: 8px;
+}
+
+.track-editor-panel input {
+  width: 70px;
+}
+
 .race-overlay {
   position: absolute;
   inset: auto 0 16px;

@@ -15,7 +15,7 @@ import { SignalingClient } from '../common/signaling';
 import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
 import { buildJoinURLs, createJoinOption, createPeerCard, nextPeerColor, type PeerCard } from '../common/hostDashboard';
 import { initPhysics } from './racePhysics';
-import { MAX_RACERS, type DriverInput, type RaceView } from './raceView';
+import { MAX_RACERS, type DriverInput } from './raceView';
 import { ThreeRaceView } from './threeRaceView';
 
 /** Host = PC. Accepts an offer from every phone and keeps one PeerConnection per phone. */
@@ -49,7 +49,7 @@ const log = createLogger(byId('log'));
 const peerList = byId<HTMLUListElement>('peers');
 const startButton = byId<HTMLButtonElement>('start-btn');
 // Created in main() once the physics engine is loaded – before signaling, so no phone can join without it
-let view: RaceView;
+let view: ThreeRaceView;
 
 // Page the phone opens via QR code / link
 const JOIN_PAGE = '/controller.html';
@@ -61,6 +61,11 @@ let raceStarted = false;
 async function main(): Promise<void> {
   await initPhysics();
   view = new ThreeRaceView(byId('race-view'));
+  // Dynamic import behind the DEV check: this is what keeps the editor out of the production build
+  if (import.meta.env.DEV) {
+    const { addTrackEditor } = await import('./trackEditor');
+    await addTrackEditor(view, byId('test-bar'));
+  }
 
   if (!hasWebRtcSupport()) {
     log('❌ Dieser Browser unterstützt kein WebRTC');
@@ -369,6 +374,7 @@ function addTestButtons(): void {
 
   const testBar = document.createElement('p');
   testBar.className = 'test-buttons';
+  testBar.id = 'test-bar';
   testBar.append(addButton);
   byId('race-view').before(testBar);
 }

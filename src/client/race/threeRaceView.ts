@@ -1,16 +1,19 @@
 import type { PeerId } from '../../shared/protocol';
+import type { TrackLayout } from '../../shared/trackLayout';
 import { MAX_WHEEL_ANGLE, WHEEL_POSITIONS, WHEEL_RADIUS, type CarPhysics } from './carPhysics';
 import { RacePhysics } from './racePhysics';
 import { MAX_RACERS, type DriverInput, type RaceView } from './raceView';
 import { splitScreenLayout, type Viewport } from './splitScreenLayout';
+import { ACTIVE_TRACK } from './track';
+import { createCenterline, createRoadGeometry, GROUND_HALF_SIZE, isDrivable, startGridPose } from './trackGeometry';
 import * as THREE from 'three';
 
-// Scene units = meters. Oval track: a ring stretched along x. Centerline radius 22, road 8 wide.
-const TRACK_INNER_RADIUS = 24;
-const TRACK_OUTER_RADIUS = 40;
-const TRACK_STRETCH_X = 1.6;
-// Start straight = the part of the ring closest to the viewer (+z); cars face −x
-const START_Z = (TRACK_INNER_RADIUS + TRACK_OUTER_RADIUS) / 2;
+// Scene units = meters.
+// Slightly above the road (no z-fighting)
+const START_LINE_HEIGHT = 0.02;
+const START_LINE_DEPTH = 1;
+// Top-down camera of the edit mode, far enough above everything that may be on the map
+const EDIT_CAMERA_HEIGHT = 100;
 // Chase camera relative to its car: behind (+z = backwards, the car faces −z) and above
 const CHASE_CAMERA_HEIGHT = 4.5;
 const CHASE_CAMERA_DISTANCE = 7;
@@ -21,31 +24,8 @@ const CHASE_CAMERA_ROLL_FOLLOW = 0.25;
 // How fast the camera catches up with the car's pitch and roll (higher = faster, in 1/s). Slow enough to filter the
 // suspension wobble; pitch still follows fully, so the camera will tilt with a sloped track.
 const CHASE_CAMERA_SMOOTHING = 4;
-// Start grid: distance of each lane from the centerline, and between rows. Row spacing must be larger than the
-// chase camera distance, or the car behind sits right in front of the camera and fills the view.
-const GRID_LANE_OFFSET = 2.5;
-const GRID_ROW_SPACING = 12;
 // Gap between the split screen views in CSS pixels, filled with the border color
 const DIVIDER = 2;
-
-// Start grid, two lanes, staggered like in real races. heading = rotation around y (car forward is −z).
-// The track is an ellipse, so even the "start straight" bends: each car sits on the centerline at its x
-// and faces along the tangent there, otherwise the rear cars would stand on the grass.
-export function startGridPose(slot: number): { x: number; z: number; heading: number } {
-    const lane = slot % 2 === 0 ? -GRID_LANE_OFFSET : GRID_LANE_OFFSET;
-    const along = Math.floor(slot / 2) * GRID_ROW_SPACING + (slot % 2) * GRID_ROW_SPACING / 2;
-
-    // Centerline ellipse (x / a)² + (z / b)² = 1, solved for z on the near side (+z)
-    const a = START_Z * TRACK_STRETCH_X;
-    const b = START_Z;
-    const centerZ = b * Math.sqrt(1 - (along / a) ** 2);
-    // Slope dz/dx of the ellipse (implicit derivative). Driving towards −x, the car points along (−1, −slope).
-    const slope = -(b * b * along) / (a * a * centerZ);
-    // Forward (−z) rotated by heading = (−sin, −cos) → solve for heading. slope 0 (at x = 0) gives 90°.
-    const heading = Math.atan2(1, slope);
-    // Lane offset sideways to the driving direction (at x = 0 simply ±z)
-    return { x: along - lane * Math.cos(heading), z: centerZ + lane * Math.sin(heading), heading };
-}
 
 interface Car {
     root: THREE.Group;
@@ -84,8 +64,17 @@ export class ThreeRaceView implements RaceView {
     // Time of the previous frame in ms, unset until the first frame
     private lastFrameTime?: number;
 
+    private track = ACTIVE_TRACK;
+    private readonly road = new THREE.Group();
+
+    // Edit mode: physics pauses, cars are hidden, the whole canvas shows the map from above
+    private editing = false;
+    private editOverlay?: THREE.Object3D;
+    private readonly editCamera = new THREE.OrthographicCamera();
+
     constructor(container: HTMLElement) {
         this.renderer.setSize(container.clientWidth, container.clientHeight);
+        this.renderer.getSize(this.size);
         // Without the scissor test, every render() would clear the WHOLE canvas, not only its viewport
         this.renderer.setScissorTest(true);
         container.append(this.renderer.domElement);
@@ -102,11 +91,18 @@ export class ThreeRaceView implements RaceView {
         const sun = new THREE.DirectionalLight(0xffffff, 2);
         sun.position.set(20, 50, 30);
         this.scene.add(sun);
-        this.scene.add(this.createGround(), this.createTrack());
+        this.scene.add(this.createGround(), this.road);
+        this.setTrack(this.track);
 
         // Oblique view from above the start straight onto the whole track
         this.overviewCamera.position.set(0, 60, 45);
         this.overviewCamera.lookAt(0, 0, 0);
+
+        // up = −z: +x is right and −z is up on the screen
+        this.editCamera.position.set(0, EDIT_CAMERA_HEIGHT, 0);
+        this.editCamera.up.set(0, 0, -1);
+        this.editCamera.lookAt(0, 0, 0);
+        this.editCamera.far = EDIT_CAMERA_HEIGHT * 2;
 
         new ResizeObserver(() => this.resize(container)).observe(container);
         this.renderer.setAnimationLoop((time) => this.render(time));
@@ -119,8 +115,7 @@ export class ThreeRaceView implements RaceView {
         this.cars.set(id, car);
         this.scene.add(car.root, car.cameraRig);
         // Only the new car: the others may already be driving
-        const { x, z, heading } = startGridPose(car.slot);
-        car.body.place(x, z, heading);
+        this.placeOnGrid(car);
     }
 
     // Only stores the values – physics and render loop read them, so 60 messages/s don't each touch the scene
@@ -138,15 +133,93 @@ export class ThreeRaceView implements RaceView {
         this.cars.delete(id);
     }
 
+    // Without a usable curve there is no road either
+    setTrack(layout: TrackLayout): void {
+        this.track = layout;
+        this.disposeObject(this.road);
+        this.road.clear();
+        if (!isDrivable(layout)) return;
+
+        const road = new THREE.Mesh(
+            createRoadGeometry(layout),
+            new THREE.MeshStandardMaterial({ color: 0x55585e, roughness: 0.9 }),
+        );
+        const curve = createCenterline(layout);
+        const start = curve.getPointAt(0);
+        const tangent = curve.getTangentAt(0);
+        const startLine = new THREE.Mesh(
+            new THREE.PlaneGeometry(layout.width, START_LINE_DEPTH),
+            new THREE.MeshStandardMaterial({ color: 0xffffff }),
+        );
+        // Flat on the ground first (x), then around y: the plane's depth lies along the driving direction
+        startLine.rotation.set(-Math.PI / 2, Math.atan2(-tangent.x, -tangent.z), 0, 'YXZ');
+        startLine.position.set(start.x, START_LINE_HEIGHT, start.z);
+        this.road.add(road, startLine);
+    }
+
+    resetCars(): void {
+        for (const car of this.cars.values()) this.placeOnGrid(car);
+    }
+
+    // overlay: whatever the editor wants to show on the map, shown until stopEditing
+    startEditing(overlay: THREE.Object3D): void {
+        this.editing = true;
+        this.editOverlay = overlay;
+        this.scene.add(overlay);
+    }
+
+    stopEditing(): void {
+        this.editing = false;
+        this.editOverlay?.removeFromParent();
+        this.editOverlay = undefined;
+        this.resetCars();
+    }
+
+    get canvas(): HTMLCanvasElement {
+        return this.renderer.domElement;
+    }
+
+    // Where a pointer position lies on the ground in edit mode
+    pointerToGround(clientX: number, clientY: number): { x: number; z: number } {
+        const rect = this.canvas.getBoundingClientRect();
+        const point = new THREE.Vector3(
+            (clientX - rect.left) / rect.width * 2 - 1,
+            -(clientY - rect.top) / rect.height * 2 + 1,
+            0,
+        ).unproject(this.editCamera);
+        return { x: point.x, z: point.z };
+    }
+
+    // Size of one CSS pixel on the ground in edit mode
+    metersPerPixel(): number {
+        return this.editHalfHeight(this.size.x, this.size.y) * 2 / this.size.y;
+    }
+
+    // Half of the map height the edit camera shows: the whole ground stays visible at any canvas shape
+    private editHalfHeight(width: number, height: number): number {
+        return GROUND_HALF_SIZE * Math.max(1, height / width);
+    }
+
+    private placeOnGrid(car: Car): void {
+        const { x, z, heading } = startGridPose(this.track, car.slot);
+        car.body.place(x, z, heading);
+    }
+
     private render(time: number): void {
         // Before the size check: a hidden view must not stop the race
         const dt = (time - (this.lastFrameTime ?? time)) / 1000;
-        this.physics.update(dt);
+        if (!this.editing) this.physics.update(dt);
         this.lastFrameTime = time;
 
         this.renderer.getSize(this.size);
         // Hidden container (0 × 0) would make the aspect NaN (0 / 0)
         if (this.size.x === 0 || this.size.y === 0) return;
+
+        for (const car of this.cars.values()) car.root.visible = !this.editing;
+        if (this.editing) {
+            this.renderEditView();
+            return;
+        }
 
         for (const car of this.cars.values()) {
             car.body.copyPoseTo(car.root);
@@ -178,6 +251,21 @@ export class ThreeRaceView implements RaceView {
         car.cameraRig.rotation.set(car.cameraPitch, this.carAngles.y, car.cameraRoll, 'YXZ');
     }
 
+    private renderEditView(): void {
+        this.overlay.hidden = true;
+        const halfHeight = this.editHalfHeight(this.size.x, this.size.y);
+        const halfWidth = halfHeight * this.size.x / this.size.y;
+        this.editCamera.left = -halfWidth;
+        this.editCamera.right = halfWidth;
+        this.editCamera.top = halfHeight;
+        this.editCamera.bottom = -halfHeight;
+        this.editCamera.updateProjectionMatrix();
+
+        this.renderer.setViewport(0, 0, this.size.x, this.size.y);
+        this.renderer.setScissor(0, 0, this.size.x, this.size.y);
+        this.renderer.render(this.scene, this.editCamera);
+    }
+
     // Draws the scene through one camera into one part of the canvas
     private renderView(viewport: Viewport, camera: THREE.PerspectiveCamera): void {
         // Normalized → CSS pixels (three.js multiplies by the pixel ratio itself), inset by half the divider
@@ -197,34 +285,12 @@ export class ThreeRaceView implements RaceView {
 
     private createGround(): THREE.Mesh {
         const ground = new THREE.Mesh(
-            new THREE.PlaneGeometry(200, 200),
+            new THREE.PlaneGeometry(GROUND_HALF_SIZE * 2, GROUND_HALF_SIZE * 2),
             new THREE.MeshStandardMaterial({ color: 0x4f7f3a, roughness: 1 }),
         );
         // PlaneGeometry lies in the xy plane → tilt it flat onto the ground (xz)
         ground.rotation.x = -Math.PI / 2;
         return ground;
-    }
-
-    // Placeholder oval: a flat ring stretched along x, slightly above the ground (no z-fighting)
-    private createTrack(): THREE.Group {
-        const track = new THREE.Group();
-        const road = new THREE.Mesh(
-            new THREE.RingGeometry(TRACK_INNER_RADIUS, TRACK_OUTER_RADIUS, 96),
-            new THREE.MeshStandardMaterial({ color: 0x55585e, roughness: 0.9 }),
-        );
-        road.rotation.x = -Math.PI / 2;
-        road.position.y = 0.01;
-        road.scale.x = TRACK_STRETCH_X;
-
-        const startLine = new THREE.Mesh(
-            new THREE.PlaneGeometry(1, TRACK_OUTER_RADIUS - TRACK_INNER_RADIUS),
-            new THREE.MeshStandardMaterial({ color: 0xffffff }),
-        );
-        startLine.rotation.x = -Math.PI / 2;
-        startLine.position.set(-3, 0.02, START_Z);
-
-        track.add(road, startLine);
-        return track;
     }
 
     // Car model: forward = −z (three.js convention, like cameras)
@@ -283,8 +349,12 @@ export class ThreeRaceView implements RaceView {
     private disposeCar(car: Car): void {
         car.root.removeFromParent();
         car.cameraRig.removeFromParent();
+        this.disposeObject(car.root);
+    }
+
+    private disposeObject(root: THREE.Object3D): void {
         const materials = new Set<THREE.Material>();
-        car.root.traverse((obj) => {
+        root.traverse((obj) => {
             if (!(obj instanceof THREE.Mesh)) return;
             obj.geometry.dispose();
             const objMaterials: THREE.Material[] = Array.isArray(obj.material) ? obj.material : [obj.material];
@@ -299,5 +369,7 @@ export class ThreeRaceView implements RaceView {
         const height = container.clientHeight;
         if (width === 0 || height === 0) return;
         this.renderer.setSize(width, height);
+        // metersPerPixel and the editor's resize handling read it before the next frame
+        this.renderer.getSize(this.size);
     }
 }
