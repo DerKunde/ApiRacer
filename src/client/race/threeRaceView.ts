@@ -55,6 +55,8 @@ interface Car {
     wheels: THREE.Group[];
     // The front ones among them – rotating them around y turns the wheels
     frontWheels: THREE.Group[];
+    // Start grid position, kept for the whole race
+    slot: number;
     camera: THREE.PerspectiveCamera;
     // Parent of the camera, in the scene instead of in root: follows the car's position and yaw directly,
     // but only the smoothed pitch and roll below
@@ -75,7 +77,7 @@ export class ThreeRaceView implements RaceView {
     // Car rotation split into angles, reused every frame. YXZ = yaw first, so pitch and roll are the car's own.
     private readonly carAngles = new THREE.Euler(0, 0, 0, 'YXZ');
 
-    // Map keeps insertion order → join order = viewport order = start grid slot
+    // Map keeps insertion order → join order = viewport order
     private readonly cars = new Map<PeerId, Car>();
 
     private readonly physics = new RacePhysics();
@@ -113,10 +115,12 @@ export class ThreeRaceView implements RaceView {
     addPlayer(id: PeerId, color: string): void {
         // Safety net: the host already decides who races
         if (this.cars.has(id) || this.cars.size >= MAX_RACERS) return;
-        const car = this.createCar(new THREE.Color(color));
+        const car = this.createCar(new THREE.Color(color), this.freeSlot());
         this.cars.set(id, car);
         this.scene.add(car.root, car.cameraRig);
-        this.placeCars();
+        // Only the new car: the others may already be driving
+        const { x, z, heading } = startGridPose(car.slot);
+        car.body.place(x, z, heading);
     }
 
     // Only stores the values – physics and render loop read them, so 60 messages/s don't each touch the scene
@@ -130,9 +134,8 @@ export class ThreeRaceView implements RaceView {
         if (car == null) return;
         this.disposeCar(car);
         this.physics.removeCar(car.body);
+        // The others move up to the next viewport, but stay where they are on the track
         this.cars.delete(id);
-        // The others move up: next viewport and next start slot
-        this.placeCars();
     }
 
     private render(time: number): void {
@@ -225,7 +228,7 @@ export class ThreeRaceView implements RaceView {
     }
 
     // Car model: forward = −z (three.js convention, like cameras)
-    private createCar(color: THREE.Color): Car {
+    private createCar(color: THREE.Color, slot: number): Car {
         const root = new THREE.Group();
 
         const body = new THREE.Mesh(
@@ -264,17 +267,15 @@ export class ThreeRaceView implements RaceView {
         const cameraRig = new THREE.Group();
         cameraRig.add(camera);
 
-        return { root, body: this.physics.addCar(), wheels, frontWheels, camera, cameraRig, cameraPitch: 0, cameraRoll: 0 };
+        return { root, body: this.physics.addCar(), wheels, frontWheels, slot, camera, cameraRig, cameraPitch: 0, cameraRoll: 0 };
     }
 
-    // Slot = position in join order
-    private placeCars(): void {
+    // Lowest slot nobody holds: after a player left, the size of the map could point to a slot still in use
+    private freeSlot(): number {
+        const taken = new Set([...this.cars.values()].map((car) => car.slot));
         let slot = 0;
-        for (const car of this.cars.values()) {
-            const { x, z, heading } = startGridPose(slot);
-            car.body.place(x, z, heading);
-            slot++;
-        }
+        while (taken.has(slot)) slot++;
+        return slot;
     }
 
     // Removing from the scene only stops drawing – geometries and materials keep their GPU buffers until disposed.
