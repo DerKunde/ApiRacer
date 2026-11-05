@@ -28,6 +28,8 @@ const ROOM_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I, O, 0, 1 (e
 // Room codes have 4 characters, peer IDs are "host" or "p<n>": anything longer is no ID. Also caps what the
 // error messages echo back ("Raum … nicht gefunden").
 const MAX_ID_LENGTH = 16;
+// Session tokens are UUIDs (36 characters)
+const MAX_SESSION_TOKEN_LENGTH = 36;
 
 // Limits against scripts. Real clients stay far below them: the join form opens a new socket for every code, and
 // after the connection setup a socket is silent.
@@ -62,12 +64,17 @@ const ALLOWED_ORIGIN = 'https://stud.messy-desk-studio.de';
 const TURN_URLS = process.env.TURN_URLS?.split(',');
 const TURN_SECRET = process.env.TURN_SECRET;
 const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
+// How long a phone's slot stays reserved after its connection broke (screen locked, network switch, reload).
+// Not much longer: until then the host keeps the player, so a racer who really left blocks the start meanwhile.
+const REJOIN_GRACE_MS = 30000;
 
 /** A phone in a room. */
 interface Controller {
-  ws: WebSocket;
+  /** undefined while the phone is away: the slot stays reserved for a rejoin until releaseTimer fires */
+  ws: WebSocket | undefined;
   /** Secret the phone got with 'joined': lets it take this slot back after losing the connection. */
   sessionToken: string;
+  releaseTimer?: NodeJS.Timeout;
 }
 
 interface Room {
@@ -191,6 +198,32 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
       return;
     }
 
+    case 'rejoin-room': {
+      if (membership) return send(ws, { type: 'error', message: 'Bereits in einem Raum' });
+      const room = rooms.get(msg.roomId.trim().toUpperCase());
+      if (!room) return failJoin(ws, limits, `Raum ${msg.roomId} nicht gefunden`);
+      const slot = [...room.controllers].find(([, controller]) => controller.sessionToken === msg.sessionToken);
+      // Counts as a failed join too: otherwise tokens could be guessed over one connection without limit
+      if (!slot) return failJoin(ws, limits, 'Sitzung abgelaufen – bitte neu beitreten');
+      const [peerId, controller] = slot;
+      clearTimeout(controller.releaseTimer);
+      controller.releaseTimer = undefined;
+      // The old connection still counts as open (dead connection not noticed yet, or a duplicated tab):
+      // the newer one wins, the old one is dropped without its close counting as leaving
+      if (controller.ws) {
+        memberships.delete(controller.ws);
+        send(controller.ws, { type: 'session-taken-over' });
+        controller.ws.close();
+      }
+      controller.ws = ws;
+      memberships.set(ws, { room, peerId });
+      const turn = createTurnIceServer(peerId);
+      send(ws, { type: 'joined', roomId: room.id, peerId, sessionToken: controller.sessionToken, iceServers: turn ? [turn] : undefined });
+      send(room.host, { type: 'peer-rejoined', peerId });
+      console.log(`[${room.id}] ${peerId} wieder verbunden`);
+      return;
+    }
+
     case 'signal': {
       if (!membership) return send(ws, { type: 'error', message: 'Nicht in einem Raum' });
       const { room, peerId } = membership;
@@ -201,7 +234,8 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
           : msg.to === HOST_ID
             ? room.host
             : undefined;
-      if (!target) return send(ws, { type: 'error', message: `Empfänger ${msg.to} unbekannt` });
+      // Also when the phone is away and its slot only reserved
+      if (!target) return send(ws, { type: 'error', message: `Empfänger ${msg.to} nicht erreichbar` });
       send(target, { type: 'signal', from: peerId, data: msg.data });
       const detail = msg.data.kind === 'description' ? msg.data.description.type : 'ICE-Kandidat';
       console.log(`[${room.id}] ${peerId} → ${msg.to}: ${detail}`);
@@ -217,18 +251,28 @@ function handleClose(ws: WebSocket): void {
   const { room, peerId } = membership;
 
   if (peerId === HOST_ID) {
-    for (const { ws: controller } of room.controllers.values()) {
-      send(controller, { type: 'room-closed' });
-      memberships.delete(controller);
+    for (const controller of room.controllers.values()) {
+      clearTimeout(controller.releaseTimer);
+      if (!controller.ws) continue;
+      send(controller.ws, { type: 'room-closed' });
+      memberships.delete(controller.ws);
       // Without a room the socket is of no use anymore: the join screen opens a new one for the next code
-      controller.close(NORMAL_CLOSURE, 'Raum geschlossen');
+      controller.ws.close(NORMAL_CLOSURE, 'Raum geschlossen');
     }
     rooms.delete(room.id);
     console.log(`Raum ${room.id} geschlossen`);
   } else {
-    room.controllers.delete(peerId);
-    send(room.host, { type: 'peer-left', peerId });
-    console.log(`[${room.id}] ${peerId} gegangen`);
+    const controller = room.controllers.get(peerId);
+    if (!controller) return;
+    // Not gone yet: the phone may only have lost its connection. Its slot stays reserved for a rejoin with the
+    // session token, and the host keeps the player meanwhile.
+    controller.ws = undefined;
+    controller.releaseTimer = setTimeout(() => {
+      room.controllers.delete(peerId);
+      send(room.host, { type: 'peer-left', peerId });
+      console.log(`[${room.id}] ${peerId} nicht zurückgekommen – gegangen`);
+    }, REJOIN_GRACE_MS);
+    console.log(`[${room.id}] ${peerId} Verbindung verloren, Platz bleibt ${REJOIN_GRACE_MS / 1000} s reserviert`);
   }
 }
 
@@ -287,6 +331,8 @@ function isClientMessage(value: unknown): value is ClientMessage {
       return true;
     case 'join-room':
       return isId(value.roomId);
+    case 'rejoin-room':
+      return isId(value.roomId) && typeof value.sessionToken === 'string' && value.sessionToken.length <= MAX_SESSION_TOKEN_LENGTH;
     case 'signal':
       return isId(value.to) && isSignalData(value.data);
     default:

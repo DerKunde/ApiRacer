@@ -7,6 +7,8 @@
  *  3. Controller sends a WebRTC offer, the host replies with an answer,
  *     both exchange ICE candidates – the server only relays these messages
  *  4. Afterwards all data flows directly over the RTCDataChannel, the server is out of the loop
+ *  5. If a phone loses its connection to the server, its slot stays reserved for a while: with 'rejoin-room' and
+ *     its session token it gets the same peer ID back, and the host is told it's the same player again
  */
 
 export type PeerId = string;
@@ -43,6 +45,8 @@ export type SignalData =
 export type ClientMessage =
   | { type: 'create-room' }
   | { type: 'join-room'; roomId: string }
+  // sessionToken: from 'joined' – takes the reserved slot back instead of joining as a new player
+  | { type: 'rejoin-room'; roomId: string; sessionToken: string }
   | { type: 'signal'; to: PeerId; data: SignalData };
 
 /** Server → Browser */
@@ -52,8 +56,15 @@ export type ServerMessage =
   // sessionToken: secret of this phone's slot in the room – lets it take the slot back after losing the connection
   | { type: 'joined'; roomId: string; peerId: PeerId; sessionToken: string; iceServers?: IceServer[] }
   | { type: 'peer-joined'; peerId: PeerId }
+  // A phone that lost its connection is back in its slot: same player. If its WebRTC connection broke meanwhile,
+  // the phone restores it with an ICE restart (a new offer on the existing connection).
+  | { type: 'peer-rejoined'; peerId: PeerId }
+  // Only once a phone is really gone: either it never came back after losing its connection, or the room closed
   | { type: 'peer-left'; peerId: PeerId }
   | { type: 'room-closed' }
+  // Another connection rejoined with this phone's session token (e.g. a duplicated tab): this one must not rejoin,
+  // or the two would keep taking the slot from each other
+  | { type: 'session-taken-over' }
   | { type: 'signal'; from: PeerId; data: SignalData }
   | { type: 'error'; message: string };
 
