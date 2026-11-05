@@ -13,6 +13,7 @@ import {
   getConnectionPath,
   sendMessage,
 } from '../common/rtc';
+import { clearSession, saveSession } from '../common/session';
 import { SignalingClient } from '../common/signaling';
 import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
 import { needsOrientationPermission, waitForSensorEvent } from '../common/mobileDeviceSensors';
@@ -238,6 +239,7 @@ function handleServerMessage(msg: ServerMessage): void {
   switch (msg.type) {
     case 'joined':
       joined = true;
+      saveSession({ roomId: msg.roomId, sessionToken: msg.sessionToken });
       byId('peer-id').textContent = msg.peerId;
       log(`Raum beigetreten als ${msg.peerId}`);
       startConnection(msg.roomId, msg.iceServers);
@@ -251,6 +253,8 @@ function handleServerMessage(msg: ServerMessage): void {
       break;
     }
     case 'room-closed':
+      // The slot is gone with the room, the token can't bring it back
+      clearSession();
       pc?.close();
       helloButton.disabled = true;
       readyButton.disabled = true;

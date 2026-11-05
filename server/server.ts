@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 import { WebSocket, WebSocketServer } from 'ws';
 import { HOST_ID, type ClientMessage, type IceServer, type PeerId, type ServerMessage, type SignalData } from '../src/shared/protocol';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 
 // ws 8.22 (package.json asks for at least that) has this option, @types/ws 8.18 doesn't know it yet
 declare module 'ws' {
@@ -63,12 +63,19 @@ const TURN_URLS = process.env.TURN_URLS?.split(',');
 const TURN_SECRET = process.env.TURN_SECRET;
 const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
 
+/** A phone in a room. */
+interface Controller {
+  ws: WebSocket;
+  /** Secret the phone got with 'joined': lets it take this slot back after losing the connection. */
+  sessionToken: string;
+}
+
 interface Room {
   id: string;
   host: WebSocket;
   // The host socket's limits: every phone that joins adds to its bucket
   hostLimits: Limits;
-  controllers: Map<PeerId, WebSocket>;
+  controllers: Map<PeerId, Controller>;
   nextPeerNumber: number;
 }
 
@@ -169,14 +176,16 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
       if (!room) return failJoin(ws, limits, `Raum ${msg.roomId} nicht gefunden`);
       if (room.controllers.size >= MAX_CONTROLLERS_PER_ROOM) return failJoin(ws, limits, 'Raum voll');
       const peerId = `p${room.nextPeerNumber++}`;
+      // Unguessable (crypto RNG): whoever holds the token can claim the slot. Never logged for the same reason.
+      const sessionToken = randomUUID();
       const turn = createTurnIceServer(peerId);
       const hostBurstBefore = messageBurst(room.host);
-      room.controllers.set(peerId, ws);
+      room.controllers.set(peerId, { ws, sessionToken });
       memberships.set(ws, { room, peerId });
       // What the host's bucket grew by is available right away, not only after the refill: the host answers the new
       // phone now. messageBurst stays the one place that says how much that is.
       room.hostLimits.tokens += messageBurst(room.host) - hostBurstBefore;
-      send(ws, { type: 'joined', roomId: room.id, peerId, iceServers: turn ? [turn] : undefined });
+      send(ws, { type: 'joined', roomId: room.id, peerId, sessionToken, iceServers: turn ? [turn] : undefined });
       send(room.host, { type: 'peer-joined', peerId });
       console.log(`[${room.id}] ${peerId} beigetreten`);
       return;
@@ -188,7 +197,7 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
       // Star topology: controllers only talk to the host, the host talks to all controllers
       const target =
         peerId === HOST_ID
-          ? room.controllers.get(msg.to)
+          ? room.controllers.get(msg.to)?.ws
           : msg.to === HOST_ID
             ? room.host
             : undefined;
@@ -208,7 +217,7 @@ function handleClose(ws: WebSocket): void {
   const { room, peerId } = membership;
 
   if (peerId === HOST_ID) {
-    for (const controller of room.controllers.values()) {
+    for (const { ws: controller } of room.controllers.values()) {
       send(controller, { type: 'room-closed' });
       memberships.delete(controller);
       // Without a room the socket is of no use anymore: the join screen opens a new one for the next code

@@ -41,7 +41,7 @@ sequenceDiagram
     S-->>H: room code + TURN credentials
     Note over H: shows the QR code
     P->>S: join-room (via QR code, link or room code)
-    S-->>P: joined + TURN credentials
+    S-->>P: joined + session token + TURN credentials
     S-->>H: peer-joined
 
     P->>S: offer

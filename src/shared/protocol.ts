@@ -3,7 +3,7 @@
  *
  * Flow (star topology: every phone connects only to the host PC):
  *  1. Host (PC) creates a room and receives a room code
- *  2. Controller (phone) joins with the code, the host gets notified
+ *  2. Controller (phone) joins with the code and gets a session token, the host gets notified
  *  3. Controller sends a WebRTC offer, the host replies with an answer,
  *     both exchange ICE candidates – the server only relays these messages
  *  4. Afterwards all data flows directly over the RTCDataChannel, the server is out of the loop
@@ -49,7 +49,8 @@ export type ClientMessage =
 export type ServerMessage =
   // lanAddresses: only sent by a local dev server, see server.ts
   | { type: 'room-created'; roomId: string; lanAddresses?: string[]; iceServers?: IceServer[] }
-  | { type: 'joined'; roomId: string; peerId: PeerId; iceServers?: IceServer[] }
+  // sessionToken: secret of this phone's slot in the room – lets it take the slot back after losing the connection
+  | { type: 'joined'; roomId: string; peerId: PeerId; sessionToken: string; iceServers?: IceServer[] }
   | { type: 'peer-joined'; peerId: PeerId }
   | { type: 'peer-left'; peerId: PeerId }
   | { type: 'room-closed' }
