@@ -1,4 +1,4 @@
-import '../style.css';
+import '../../style.css';
 import {
     needsOrientationPermission,
     probeOrientationSensor,
@@ -8,8 +8,8 @@ import {
     type OrientationSensorName,
     type SensorPermissionName,
     type WebKitDeviceOrientationEvent,
-} from './mobileDeviceSensors';
-import { byId, createLogger } from './ui';
+} from '../common/mobileDeviceSensors';
+import { byId, createLogger } from '../common/ui';
 
 /** Sensor check page: shows OS, browser and which sensor APIs exist and deliver data on this device. */
 

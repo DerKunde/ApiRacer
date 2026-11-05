@@ -118,7 +118,7 @@ Type-checks client and server and writes the static pages to `dist/`. The produc
 | `host3dPhoneOrientation.html` | PC     | 3D view of all connected phones                            |
 | `phone3dClient.html`          | Phone  | Sends the phone's rotation                                 |
 | `host.html`                   | PC     | Steering wheel demo: connection path, ping, steering value |
-| `controller.html`             | Phone  | Sends the steering value                                   |
+| `controller.html`             | Phone  | Sends the steering value, gas and brake                    |
 | `sensors.html`                | Phone  | Checks which orientation/motion APIs the device supports   |
 
 The start page `index.html` links all of them. The phone pages are opened via the QR code, so you don't need to type the room code or link.
@@ -127,45 +127,60 @@ The start page `index.html` links all of them. The phone pages are opened via th
 
 All browser code lives in `src/client/`, the signaling server in `server/`. Every page (`*.html` in the root) has its own entry script, [index.html](index.html) links all of them.
 
-**Shared**
+```
+src/
+├── shared/           Types shared by signaling server and browser
+└── client/
+    ├── common/           Used by several pages: signaling, WebRTC, host UI, sensor access
+    ├── orientationDemo/  3D demo: phone rotation shown live on the PC
+    ├── race/             Racing game (work in progress)
+    └── sensorCheck/      Sensor check page
+```
 
-| File                                    | Purpose                                                                                  |
-| --------------------------------------- | ---------------------------------------------------------------------------------------- |
-| [server.ts](server/server.ts)           | Signaling server (WebSocket): rooms, relays offer/answer/ICE, hands out TURN credentials |
-| [protocol.ts](src/shared/protocol.ts)   | Message types shared by signaling server, host sessions and phone (client)                |
-| [signaling.ts](src/client/signaling.ts) | WebSocket connection to the signaling server                                             |
-| [rtc.ts](src/client/rtc.ts)             | WebRTC helpers: ICE config, DataChannel options, applying signals, connection path       |
-| [ui.ts](src/client/ui.ts)               | Small DOM helpers (element lookup, on-page log)                                          |
+**Server and shared code** (`server/`, `src/shared/`, `src/client/common/`)
 
-**3D demo**
+| File                                                               | Purpose                                                                                  |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| [server.ts](server/server.ts)                                      | Signaling server (WebSocket): rooms, relays offer/answer/ICE, hands out TURN credentials |
+| [protocol.ts](src/shared/protocol.ts)                              | Message types shared by signaling server, host sessions and phone (client)                |
+| [signaling.ts](src/client/common/signaling.ts)                     | WebSocket connection to the signaling server                                             |
+| [rtc.ts](src/client/common/rtc.ts)                                 | WebRTC helpers: ICE config, DataChannel options, applying signals, connection path       |
+| [hostDashboard.ts](src/client/common/hostDashboard.ts)             | Host page UI: join links with QR code, peer cards, peer colors                           |
+| [mobileDeviceSensors.ts](src/client/common/mobileDeviceSensors.ts) | Sensor access: permission, source detection, compass offset, angles to quaternion        |
+| [ui.ts](src/client/common/ui.ts)                                   | Small DOM helpers (element lookup, on-page log)                                          |
 
-| File                                                              | Purpose                                                                             |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| [host3dPhoneOrientation.ts](src/client/host3dPhoneOrientation.ts) | PC: accepts phones, forwards their rotation to the view                             |
-| [phone3dClient.ts](src/client/phone3dClient.ts)                   | Phone: picks the orientation source, sends a quaternion at 60 Hz                    |
-| [mobileDeviceSensors.ts](src/client/mobileDeviceSensors.ts)       | Sensor access: permission, source detection, compass offset, angles to quaternion   |
-| [orientationView.ts](src/client/orientationView.ts)               | Interface for a 3D view (`addPeer` / `updatePeer` / `removePeer`)                   |
-| [threeOrientationView.ts](src/client/threeOrientationView.ts)     | three.js implementation of the `OrientationView` interface: one phone model per peer in a grid |
+**3D demo** (`src/client/orientationDemo/`)
 
-**Steering demo**
+| File                                                                              | Purpose                                                                             |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| [host3dPhoneOrientation.ts](src/client/orientationDemo/host3dPhoneOrientation.ts) | PC: accepts phones, forwards their rotation to the view                             |
+| [phone3dClient.ts](src/client/orientationDemo/phone3dClient.ts)                   | Phone: picks the orientation source, sends a quaternion at 60 Hz                    |
+| [orientationView.ts](src/client/orientationDemo/orientationView.ts)               | Interface for a 3D view (`addPeer` / `updatePeer` / `removePeer`)                   |
+| [threeOrientationView.ts](src/client/orientationDemo/threeOrientationView.ts)     | three.js implementation of the `OrientationView` interface: one phone model per peer in a grid |
 
-| File                                        | Purpose                                                                                         |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| [host.ts](src/client/host.ts)               | PC: connection path, ping and steering value per phone (counterpart of `host3dPhoneOrientation.ts`) |
-| [controller.ts](src/client/controller.ts)   | Phone: tilt to steering value at 60 Hz                                                          |
-| [orientation.ts](src/client/orientation.ts) | Steering logic: how the phone is held (gravity), tilt → steering value                          |
+**Race** (`src/client/race/`)
+
+| File                                                     | Purpose                                                                                         |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [host.ts](src/client/race/host.ts)                       | PC: connection path, ping, steering, gas and brake per phone, split screen race view            |
+| [controller.ts](src/client/race/controller.ts)           | Phone: tilt to steering value, gas and brake buttons, sent together at 60 Hz                    |
+| [steering.ts](src/client/race/steering.ts)               | Steering logic: how the phone is held (gravity), tilt → steering value                          |
+| [raceView.ts](src/client/race/raceView.ts)               | Interface for the race view (`addPlayer` / `updateSteering` / `removePlayer`), `MAX_RACERS`     |
+| [threeRaceView.ts](src/client/race/threeRaceView.ts)     | three.js implementation of the `RaceView` interface: one scene, one chase camera per player     |
+| [splitScreenLayout.ts](src/client/race/splitScreenLayout.ts) | Viewport layout per player count: full, top/bottom, 2 × 2                                   |
+| [screenOrientation.ts](src/client/race/screenOrientation.ts) | Portrait/landscape detection of the screen (not used yet)                                   |
 
 **Sensor check and deployment**
 
-| File                                            | Purpose                                                                          |
-| ----------------------------------------------- | -------------------------------------------------------------------------------- |
-| [sensorCheck.ts](src/client/sensorCheck.ts)     | Sensor check page: which orientation/motion APIs the device and browser support |
-| [deploy.yml](.github/workflows/deploy.yml)      | GitHub Actions: signaling server via SSH, static pages via FTPS                  |
-| [apiracer-deploy.sh](deploy/apiracer-deploy.sh) | Deploy script on the server: update, restart, rollback on failure                |
+| File                                                    | Purpose                                                                          |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| [sensorCheck.ts](src/client/sensorCheck/sensorCheck.ts) | Sensor check page: which orientation/motion APIs the device and browser support |
+| [deploy.yml](.github/workflows/deploy.yml)              | GitHub Actions: signaling server via SSH, static pages via FTPS                  |
+| [apiracer-deploy.sh](deploy/apiracer-deploy.sh)         | Deploy script on the server: update, restart, rollback on failure                |
 
 **Where to start reading:**
-- **WebRTC:** [phone3dClient.ts](src/client/phone3dClient.ts) creates the connection and the DataChannel, [host3dPhoneOrientation.ts](src/client/host3dPhoneOrientation.ts) answers it. Both use the helpers in [rtc.ts](src/client/rtc.ts), the message flow is described at the top of [protocol.ts](src/shared/protocol.ts).
-- **Device orientation:** [mobileDeviceSensors.ts](src/client/mobileDeviceSensors.ts), starting with `detectOrientationSource()` (fallback chain) and `eulerToQuaternion()`.
+- **WebRTC:** [phone3dClient.ts](src/client/orientationDemo/phone3dClient.ts) creates the connection and the DataChannel, [host3dPhoneOrientation.ts](src/client/orientationDemo/host3dPhoneOrientation.ts) answers it. Both use the helpers in [rtc.ts](src/client/common/rtc.ts), the message flow is described at the top of [protocol.ts](src/shared/protocol.ts).
+- **Device orientation:** [mobileDeviceSensors.ts](src/client/common/mobileDeviceSensors.ts), starting with `detectOrientationSource()` (fallback chain) and `eulerToQuaternion()`.
 
 ## Required browsers and devices
 

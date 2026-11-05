@@ -5,40 +5,72 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ApiRacer · Controller</title>
   </head>
-  <body>
+  <body id="body">
     <main>
       <h1>📱 ApiRacer Controller</h1>
-      
-      <button id="gyroPermissionButton">Device Gyro Permission</button>
-      <form id="join-form" class="join-form">
-        <label>
-          Raumcode
-          <input id="room-input" maxlength="4" autocapitalize="characters" autocomplete="off" required />
-        </label>
-        <button type="submit">Beitreten</button>
-      </form>
+
+      <!-- Only thing on the page while not in a room: no code in the URL, joining failed, or the host closed the room
+           (showJoinScreen in controller.ts). Same field as on the 3D phone page. -->
+      <section id="join-screen">
+        <p class="status" id="join-message" hidden></p>
+        <form id="join-form" class="join-row">
+          <input
+            id="room-input"
+            aria-label="Raumcode"
+            maxlength="4"
+            autocapitalize="characters"
+            autocomplete="off"
+            required
+          />
+          <button type="submit">Beitreten</button>
+        </form>
+        <p class="hint">Raumcode vom Host-Bildschirm eintragen oder den QR-Code dort mit der Kamera scannen.</p>
+      </section>
 
       <section id="session" hidden>
-        <p class="status" id="status">…</p>
-        <dl>
-          <dt>Raum</dt><dd id="room">–</dd>
-          <dt>Peer-ID</dt><dd id="peer-id">–</dd>
-          <dt>Verbindungsweg</dt><dd id="path">–</dd>
-          <dt>Alpha (Drehung)</dt><dd id="orientation-alpha">–</dd>
-          <dt>Beta (vor/zurück)</dt><dd id="orientation-beta">–</dd>
-          <dt>Gamma (links/rechts)</dt><dd id="orientation-gamma">–</dd>
-          <dt>Schwerkraft x / y</dt><dd id="gravity">–</dd>
-          <dt>Haltung</dt><dd id="device-holding">–</dd>
-          <dt>Lenkung</dt><dd id="steering">–</dd>
-        </dl>
-        <button id="hello-btn" class="big" disabled>👋 Hallo senden</button>
-      </section>
+        <!-- Brake left, gas right: held in landscape, each thumb rests on its own half. Pressed while a finger is on it (setupPedal in controller.ts).
+             Once the sensors work, this fills the whole screen (body[data-mode='race'] in style.css). -->
+        <div class="race-controls">
+          <button type="button" id="brake-btn" class="pedal pedal-brake">Bremse</button>
+          <div class="race-center">
+            <!-- Toggle, only shown with working motion sensors, a car and while in the lobby (updateReadyButton in controller.ts) -->
+            <button type="button" id="ready-btn" class="big ready-btn" aria-pressed="false" disabled hidden>Bereit</button>
+            <p class="status" id="status">…</p>
+            <button type="button" id="debug-open-btn" class="debug-btn" aria-controls="debug-panel" aria-expanded="false">Debug</button>
+          </div>
+          <button type="button" id="gas-btn" class="pedal pedal-gas">Gas</button>
+        </div>
 
-      <section>
-        <h2>Protokoll</h2>
-        <ol id="log" class="log"></ol>
+        <!-- Connection info and log: part of the page until the race mode starts, then only behind the debug button -->
+        <div id="debug-panel" class="debug-panel">
+          <button type="button" id="debug-close-btn" class="debug-btn">✕ Schließen</button>
+          <dl>
+            <dt>Raum</dt><dd id="room">–</dd>
+            <dt>Peer-ID</dt><dd id="peer-id">–</dd>
+            <dt>Verbindungsweg</dt><dd id="path">–</dd>
+            <dt>Alpha (Drehung)</dt><dd id="orientation-alpha">–</dd>
+            <dt>Beta (vor/zurück)</dt><dd id="orientation-beta">–</dd>
+            <dt>Gamma (links/rechts)</dt><dd id="orientation-gamma">–</dd>
+            <dt>Schwerkraft x / y</dt><dd id="gravity">–</dd>
+            <dt>Haltung</dt><dd id="device-holding">–</dd>
+            <dt>Lenkung</dt><dd id="steering">–</dd>
+          </dl>
+          <button id="hello-btn" class="big" disabled>👋 Hallo senden</button>
+
+          <h2>Protokoll</h2>
+          <ol id="log" class="log"></ol>
+        </div>
       </section>
     </main>
-    <script type="module" src="/src/client/controller.ts"></script>
+
+    <!-- Only when the sensors have to be allowed first (iOS), shown by initSensors in controller.ts.
+         iOS only shows the permission prompt after a tap, so this has to be a button. -->
+    <div class="fullscreen-overlay" id="sensor-overlay" role="dialog" aria-modal="true" aria-labelledby="sensor-overlay-title" hidden>
+      <h2 id="sensor-overlay-title">Bewegungssensoren freigeben</h2>
+      <p>Du lenkst, indem du das Handy neigst. Dafür braucht die Seite Zugriff auf die Bewegungssensoren.</p>
+      <button id="sensor-permission-btn" class="big">Sensoren freigeben</button>
+      <p class="hint" id="sensor-hint" hidden></p>
+    </div>
+    <script type="module" src="/src/client/race/controller.ts"></script>
   </body>
 </html>

@@ -11,6 +11,7 @@
     "build": "npm run typecheck && vite build"
   },
   "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
     "qrcode": "^1.5.4",
     "three": "^0.186.1",
     "ws": "^8.22.0"

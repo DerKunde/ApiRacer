@@ -1,5 +1,5 @@
-import '../style.css';
-import { HOST_ID, type ChannelMessage, type ServerMessage, type IceServer } from '../shared/protocol';
+import '../../style.css';
+import { HOST_ID, type ChannelMessage, type ServerMessage, type IceServer } from '../../shared/protocol';
 import {
   applySignal,
   candidateType,
@@ -10,9 +10,9 @@ import {
   describePath,
   getConnectionPath,
   sendMessage,
-} from './rtc';
-import { SignalingClient } from './signaling';
-import { byId, createLogger, hasWebRtcSupport } from './ui';
+} from '../common/rtc';
+import { SignalingClient } from '../common/signaling';
+import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
 import {
   detectOrientationSource,
   eulerToQuaternion,
@@ -22,7 +22,7 @@ import {
   type OrientationSource,
   type Quaternion,
   type WebKitDeviceOrientationEvent,
-} from './mobileDeviceSensors';
+} from '../common/mobileDeviceSensors';
 
 /**
  * 3D demo phone. Determines the phone's absolute rotation and sends it as a quaternion to the host.

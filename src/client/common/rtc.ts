@@ -1,4 +1,4 @@
-import type { ChannelMessage, IceServer, SignalData } from '../shared/protocol';
+import type { ChannelMessage, IceServer, SignalData } from '../../shared/protocol';
 
 const STUN_SERVER = 'stun:relay.messy-desk-studio.de:3478';
 
@@ -9,6 +9,9 @@ export const CONTROL_CHANNEL_LABEL = 'control';
  * because for real-time control only the latest value matters.
  */
 export const CONTROL_CHANNEL_OPTIONS: RTCDataChannelInit = { ordered: false, maxRetransmits: 0 };
+
+export const RELIABLE_CHANNEL_LABEL = 'reliable';
+export const RELIABLE_CHANNEL_OPTIONS: RTCDataChannelInit = { ordered: true, maxRetransmits: undefined };
 
 /**
  * Builds the `RTCConfiguration` for a new `RTCPeerConnection` from the available ICE servers:

@@ -3,34 +3,39 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ApiRacer · Host</title>
+    <title>ApiRacer · Rennen (Host)</title>
   </head>
   <body>
-    <main>
-      <h1>🖥️ ApiRacer Host</h1>
+    <main class="dashboard">
+      <h1 class="dashboard-title">Rennen Host</h1>
 
-      <section>
-        <p>Raumcode</p>
-        <p class="room-code" id="room-code">…</p>
-        <p>Mit dem Handy scannen oder Link öffnen:</p>
+      <!-- <details> = native collapsible, no JS: click on the summary toggles the "open" attribute -->
+      <details class="dashboard-join" open>
+        <summary><h2>Verbinden</h2></summary>
+        <p class="room-line">Raumcode <span class="room-code" id="room-code">…</span></p>
         <ul id="join-links" class="links"></ul>
+      </details>
+
+      <section class="dashboard-view">
+        <h2>Rennen</h2>
+        <!-- Enabled by updateStartButton in host.ts once every racer is ready -->
+        <p class="race-start">
+          <button type="button" id="start-btn" disabled>Rennen starten</button>
+          <span id="ready-count">Warte auf Fahrer …</span>
+        </p>
+        <div id="race-view"></div>
       </section>
 
-      <section>
+      <section class="dashboard-peers">
         <h2>Verbundene Handys</h2>
-        <table>
-          <thead>
-            <tr><th>ID</th><th>Status</th><th>Verbindungsweg</th><th>Lenkwert</th><th>Ping</th></tr>
-          </thead>
-          <tbody id="peers"></tbody>
-        </table>
+        <ul id="peers" class="peer-list"></ul>
       </section>
 
-      <section>
+      <section class="dashboard-log">
         <h2>Protokoll</h2>
         <ol id="log" class="log"></ol>
       </section>
     </main>
-    <script type="module" src="/src/client/host.ts"></script>
+    <script type="module" src="/src/client/race/host.ts"></script>
   </body>
 </html>

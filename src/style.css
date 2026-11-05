@@ -199,7 +199,8 @@ td {
   text-align: left;
 }
 
-tr.flash {
+tr.flash,
+.peer-card.flash {
   animation: flash 1s ease-out;
 }
 
@@ -294,24 +295,154 @@ button.big {
   font-size: 1.2rem;
 }
 
-.join-form {
+/* Race controller: brake left, gas right, ready button in between – in landscape each thumb gets its own side */
+.race-controls {
+  display: grid;
+  grid-template-columns: 1fr minmax(0, 14rem) 1fr;
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.race-center {
   display: flex;
-  gap: 8px;
-  align-items: end;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
 }
 
-.join-form input {
+.race-center .status {
+  margin: 0;
+  font-size: 1rem;
+}
+
+/* Small text button, so it doesn't compete with the ready button */
+.debug-btn {
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+
+/* Open and close only exist in the race mode – before that the debug panel is part of the page anyway */
+#debug-open-btn,
+#debug-close-btn {
+  display: none;
+}
+
+/* Race mode, set by startSensors in controller.ts: the controls fill the screen, nothing else, no scrolling.
+   touch-action: none → no panning or pinch-zoom anywhere, even between the buttons */
+body[data-mode='race'] {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body[data-mode='race'] main > h1 {
+  display: none;
+}
+
+body[data-mode='race'] .race-controls {
+  position: fixed;
+  inset: 0;
+  margin: 0;
+  /* Notch and home indicator in landscape */
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  touch-action: none;
+}
+
+body[data-mode='race'] .pedal {
+  min-height: 0;
+}
+
+body[data-mode='race'] #debug-open-btn,
+body[data-mode='race'] #debug-close-btn {
   display: block;
-  font: inherit;
-  font-size: 1.5rem;
-  width: 6em;
-  padding: 6px 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
 }
 
-/* 3D phone page: room code field and join button in one row, same height (stretch) */
+/* In race mode only visible as a scrollable overlay after tapping the debug button (class set in controller.ts) */
+body[data-mode='race'] .debug-panel {
+  display: none;
+}
+
+body[data-mode='race'] .debug-panel.open {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--bg);
+}
+
+/* Text in --bg: readable on the green/red in both themes (white is too weak on the light dark-mode colors) */
+.pedal {
+  min-height: 140px;
+  font-size: 1.4rem;
+  font-weight: 600;
+  color: var(--bg);
+  opacity: 0.55;
+  transition: opacity 0.05s, transform 0.05s;
+  /* A thumb resting on the pedal must not scroll, zoom, select text or open the iOS long-press callout */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pedal-brake {
+  background: var(--error);
+}
+
+.pedal-gas {
+  background: var(--ok);
+}
+
+/* Set by setupPedal in controller.ts while a finger is on it – :active is unreliable with several fingers */
+.pedal.pressed {
+  opacity: 1;
+  transform: scale(0.97);
+}
+
+/* aria-pressed is set by the click handler in controller.ts */
+.ready-btn[aria-pressed='true'] {
+  background: var(--ok);
+}
+
+/* Race controller: covers the whole page until the motion sensors are allowed – without them there is no steering.
+   touch-action: none → swiping on it doesn't scroll the page underneath (a tap on the button still works) */
+.fullscreen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px 16px;
+  text-align: center;
+  background: color-mix(in srgb, var(--bg) 85%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  touch-action: none;
+}
+
+/* display: flex above would beat the hidden attribute's display: none */
+.fullscreen-overlay[hidden] {
+  display: none;
+}
+
+/* Narrower than the page, so the text lines and the button stay a comfortable width in landscape */
+.fullscreen-overlay > * {
+  max-width: 28rem;
+  margin: 0;
+}
+
+/* Phone pages (3D phone, race controller): room code field and join button in one row, same height (stretch) */
 .join-row {
   display: flex;
   align-items: stretch;
@@ -589,7 +720,93 @@ button.big {
   overflow: hidden;
 }
 
-/* Connected phones: one card each (createPeerCard in host3dPhoneOrientation.ts) */
+/* Race view on the host: 16:9 like a TV, split into up to 4 views inside the one canvas (threeRaceView.ts).
+   position: relative → anchor for the "waiting for players" overlay */
+#race-view {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+#race-view canvas {
+  display: block;
+}
+
+/* Dev only (trackEditor.ts): map and side panel in a row */
+.track-editor {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.track-editor #race-view {
+  flex: 1;
+  min-width: 0;
+}
+
+.track-editor-panel {
+  flex: none;
+  width: 220px;
+  display: grid;
+  gap: 8px;
+}
+
+.track-editor-panel[hidden],
+.track-editor-panel section[hidden] {
+  display: none;
+}
+
+.track-editor-panel h3,
+.track-editor-panel p {
+  margin: 0;
+}
+
+.track-editor-panel section {
+  display: grid;
+  gap: 8px;
+}
+
+.track-editor-panel input {
+  width: 70px;
+}
+
+.race-overlay {
+  position: absolute;
+  inset: auto 0 16px;
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+/* display rules elsewhere would beat the hidden attribute's display: none */
+.race-overlay[hidden] {
+  display: none;
+}
+
+/* Countdown across the middle of the race view (showBanner in threeRaceView.ts).
+   White with a shadow: readable on road, grass and sky, in both color schemes. */
+.race-banner {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  font-size: clamp(3rem, 10vw, 7rem);
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 2px 12px rgb(0 0 0 / 0.6);
+  pointer-events: none;
+}
+
+.race-banner[hidden] {
+  display: none;
+}
+
+/* Connected phones: one card each (createPeerCard in hostDashboard.ts) */
 .peer-list {
   list-style: none;
   padding: 0;
@@ -735,10 +952,33 @@ button.big {
 }
 
 /* Dev-only buttons above the 3D view (host3dPhoneOrientation.ts) */
+/* Race host: start button with the ready count next to it */
+.race-start {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+
 .test-buttons {
   display: flex;
   gap: 8px;
   margin: 0 0 12px;
+}
+
+/* Race host: buttons below a peer card's details – "Zum Zuschauer" in the lobby, plus a dev test player's controls */
+.peer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+
+/* All buttons hidden (spectator, or the race has started) → no empty row with its margin */
+.peer-actions:not(:has(> :not([hidden]))) {
+  display: none;
 }
 
 /* Canvas is inline by default → small gap below it */

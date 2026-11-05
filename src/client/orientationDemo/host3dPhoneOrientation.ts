@@ -1,5 +1,5 @@
-import '../style.css';
-import type { ChannelMessage, IceServer, PeerId, ServerMessage } from '../shared/protocol';
+import '../../style.css';
+import type { ChannelMessage, IceServer, PeerId, ServerMessage } from '../../shared/protocol';
 import {
   applySignal,
   candidateType,
@@ -8,11 +8,11 @@ import {
   describePath,
   getConnectionPath,
   sendMessage,
-} from './rtc';
-import { SignalingClient } from './signaling';
-import { byId, createLogger, hasWebRtcSupport } from './ui';
-import { eulerToQuaternion, type Quaternion } from './mobileDeviceSensors';
-import QRCode from 'qrcode';
+} from '../common/rtc';
+import { SignalingClient } from '../common/signaling';
+import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
+import { eulerToQuaternion, type Quaternion } from '../common/mobileDeviceSensors';
+import { buildJoinURLs, createJoinOption, createPeerCard, nextPeerColor, type PeerCard } from '../common/hostDashboard';
 import { ThreeOrientationView } from './threeOrientationView';
 import type { OrientationView } from './orientationView';
 
@@ -26,7 +26,7 @@ interface Peer {
   pc: RTCPeerConnection;
   channel?: RTCDataChannel;
   enqueue: (task: () => Promise<void>) => void;
-  card: PeerCard;
+  card: PeerCard<(typeof DETAILS)[number]>;
   color: string;
   rttMs?: number;
   path?: string;
@@ -36,22 +36,11 @@ interface Peer {
   absolute?: boolean;
 }
 
-/** One card per phone in the sidebar; keeps the elements renderPeer writes into. */
-interface PeerCard {
-  root: HTMLLIElement;
-  state: HTMLElement;
-  path: HTMLElement;
-  rtt: HTMLElement;
-  absolute: HTMLElement;
-  quaternion: HTMLElement;
-}
+// Peer card rows, in display order
+const DETAILS = ['Weg', 'Absolut', 'Quaternion'] as const;
 
 const log = createLogger(byId('log'));
 const peerList = byId<HTMLUListElement>('peers');
-const QR_CODE_SIZE = 200;
-let nextColorIndex = 0;
-// Short enough to stay narrower than the QR code – the button then stretches to exactly its width
-const COPY_LABEL = '🔗 Link kopieren';
 const view: OrientationView = new ThreeOrientationView(byId('orientation-view'));
 
 // Page the phone opens via QR code / link
@@ -106,71 +95,18 @@ function handleServerMessage(msg: ServerMessage): void {
 function showRoom(roomId: string, lanAddresses: string[]): void {
   byId('room-code').textContent = roomId;
 
-  // Dev server opened on "localhost": the phone can't use that name → offer every LAN address instead.
-  // import.meta.env.DEV is replaced by `false` in the production build, so this branch is stripped there.
-  const urls =
-    import.meta.env.DEV && isOpenedOnLocalhost() ? buildLocalRoomURLs(roomId, lanAddresses) : [buildRoomURL(roomId)];
-
-  byId('join-links').replaceChildren(...urls.map(createJoinOption));
+  const urls = buildJoinURLs(JOIN_PAGE, roomId, lanAddresses);
+  byId('join-links').replaceChildren(...urls.map((url) => createJoinOption(url, log)));
   if (urls.length === 0) log('⚠️ Keine LAN-Adresse gefunden – ist der PC mit einem Netzwerk verbunden?');
   log(`Raum ${roomId} erstellt – warte auf Handys …`);
-}
-
-/** Production: the phone opens the 3D client under the same address as this page. */
-function buildRoomURL(roomId: string): string {
-  // URL keeps protocol and port of the current page and omits default ports (no "host:/…")
-  const url = new URL(JOIN_PAGE, location.origin);
-  url.searchParams.set('room', roomId);
-  return url.href;
-}
-
-/**
- * Local dev: one URL per LAN address of the PC. The server can only list all interfaces
- * (incl. virtual adapters like WSL/Hyper-V/VPN), so we offer all of them – at least one works.
- */
-function buildLocalRoomURLs(roomId: string, lanAddresses: string[]): string[] {
-  return lanAddresses.map((address) => {
-    const url = new URL(buildRoomURL(roomId));
-    url.hostname = address;
-    return url.href;
-  });
-}
-
-function isOpenedOnLocalhost(): boolean {
-  return ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
-}
-
-/** One way to join: QR code to scan with the phone, plus a button that copies the link (e.g. to send it via chat). */
-function createJoinOption(url: string): HTMLLIElement {
-  const item = document.createElement('li');
-  const canvas = document.createElement('canvas');
-  const copyButton = document.createElement('button');
-  copyButton.textContent = COPY_LABEL;
-  // Link is no longer shown as text – hovering the button still reveals it (handy with several LAN links in dev)
-  copyButton.title = url;
-  copyButton.addEventListener('click', () => void copyJoinLink(copyButton, url));
-  item.append(canvas, copyButton);
-  createSessionQrCode(canvas, url);
-  return item;
-}
-
-// Clipboard API only exists in a secure context (https or localhost) → on plain http via LAN IP
-// navigator.clipboard is undefined and the call throws, which ends up in the catch.
-async function copyJoinLink(button: HTMLButtonElement, url: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(url);
-    button.textContent = '✓ Kopiert';
-    window.setTimeout(() => (button.textContent = COPY_LABEL), 2000);
-  } catch (err) {
-    log(`❌ Link konnte nicht kopiert werden: ${String(err)} – Link: ${url}`);
-  }
 }
 
 function addPeer(id: PeerId): void {
   const pc = new RTCPeerConnection(createRtcConfig(iceServers));
   // Same color for the phone model and its card, so you can tell which card belongs to which phone
   const color = nextPeerColor();
-  const card = createPeerCard(id, color);
+  const card = createPeerCard(peerList, id, color, DETAILS);
+  card.details.Quaternion.className = 'quaternion';
   const peer: Peer = { id, pc, card, color, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), orientationSeq: 0 };
   peers.set(id, peer);
   renderPeer(peer);
@@ -238,61 +174,12 @@ async function refreshPath(peer: Peer): Promise<void> {
   renderPeer(peer);
 }
 
-/**
- * Hue steps by the golden ratio (0.381966 of the circle ≈ 137.5°), so consecutive colors are far apart and never
- * repeat exactly. The counter only goes up – a phone that leaves doesn't hand its color to the next one.
- * Comma syntax for hsl(), because THREE.Color's parser expects it.
- */
-function nextPeerColor(): string {
-  const hue = (++nextColorIndex * 0.381966 % 1) * 360;
-  return `hsl(${hue.toFixed(1)}, 70%, 55%)`;
-}
-
-/** Card header: ID + connection state, below it the details as label/value pairs (<dl>). */
-function createPeerCard(id: PeerId, color: string): PeerCard {
-  const root = document.createElement('li');
-  root.className = 'peer-card';
-  // Read by .peer-card in style.css (colored left edge)
-  root.style.setProperty('--peer-color', color);
-
-  const head = document.createElement('div');
-  head.className = 'peer-head';
-  const name = document.createElement('strong');
-  name.textContent = id;
-  // Right side of the header: "connected · 12.3 ms"
-  const status = document.createElement('span');
-  status.className = 'peer-status';
-  const state = document.createElement('span');
-  const rtt = document.createElement('span');
-  rtt.className = 'peer-rtt';
-  status.append(state, rtt);
-  head.append(name, status);
-
-  const details = document.createElement('dl');
-  const addDetail = (label: string): HTMLElement => {
-    const term = document.createElement('dt');
-    const value = document.createElement('dd');
-    term.textContent = label;
-    details.append(term, value);
-    return value;
-  };
-  // Display order = call order
-  const path = addDetail('Weg');
-  const absolute = addDetail('Absolut');
-  const quaternion = addDetail('Quaternion');
-  quaternion.className = 'quaternion';
-
-  root.append(head, details);
-  peerList.append(root);
-  return { root, state, path, rtt, absolute, quaternion };
-}
-
 function renderPeer(peer: Peer): void {
-  const { state, path, quaternion, absolute, rtt } = peer.card;
+  const { state, rtt, details } = peer.card;
   state.textContent = peer.pc.connectionState;
-  path.textContent = peer.path ?? '–';
-  quaternion.textContent = peer.quaternion?.map((value) => value.toFixed(2)).join(' / ') ?? '–';
-  absolute.textContent = peer.absolute === undefined ? '–' : peer.absolute ? 'ja' : 'nein';
+  details.Weg.textContent = peer.path ?? '–';
+  details.Quaternion.textContent = peer.quaternion?.map((value) => value.toFixed(2)).join(' / ') ?? '–';
+  details.Absolut.textContent = peer.absolute === undefined ? '–' : peer.absolute ? 'ja' : 'nein';
   // Empty until the first pong → CSS hides it together with its "·" separator (.peer-rtt:empty)
   rtt.textContent = peer.rttMs === undefined ? '' : `${peer.rttMs.toFixed(1)} ms`;
 }
@@ -306,13 +193,6 @@ function removePeer(id: PeerId): void {
   view.removePeer(id);
   peers.delete(id);
   log(`[${id}] hat den Raum verlassen`);
-}
-
-// Fixed width: the canvas is not in the page yet, so it has no clientWidth to read
-function createSessionQrCode(canvas: HTMLCanvasElement, lobbyURL: string) {
-  QRCode.toCanvas(canvas, lobbyURL, { width: QR_CODE_SIZE, margin: 2 }).catch((err: unknown) =>
-    log(`❌ QR-Code konnte nicht erzeugt werden: ${String(err)}`),
-  );
 }
 
 // Dev-only test buttons: add/remove fake phones without real controllers, to check grid layout and camera fit.

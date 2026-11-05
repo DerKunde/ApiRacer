@@ -1,4 +1,4 @@
-import type { ClientMessage, ServerMessage } from '../shared/protocol';
+import type { ClientMessage, ServerMessage } from '../../shared/protocol';
 
 /**
  * Thin wrapper around the WebSocket to the signaling server.

@@ -1,5 +1,5 @@
-import type { PeerId } from '../shared/protocol';
-import type { Quaternion } from './mobileDeviceSensors';
+import type { PeerId } from '../../shared/protocol';
+import type { Quaternion } from '../common/mobileDeviceSensors';
 import type { OrientationView } from './orientationView';
 import * as THREE from 'three';
 
