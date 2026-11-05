@@ -166,7 +166,10 @@ function handleMessage(ws: WebSocket, msg: ClientMessage): void {
       // Also when the phone is away and its slot only reserved
       if (!target) return send(ws, { type: 'error', message: `Empfänger ${msg.to} nicht erreichbar` });
       send(target, { type: 'signal', from: peerId, data: msg.data });
-      const detail = msg.data.kind === 'description' ? msg.data.description.type : 'ICE-Kandidat';
+      const detail =
+        msg.data.kind === 'description'
+          ? `${msg.data.description.type}${msg.data.newConnection ? ' (neue Verbindung)' : ''}`
+          : 'ICE-Kandidat';
       console.log(`[${room.id}] ${peerId} → ${msg.to}: ${detail}`);
       return;
     }

@@ -13,7 +13,7 @@ import {
   getConnectionPath,
   sendMessage,
 } from '../common/rtc';
-import { clearSession, saveSession, type StoredSession } from '../common/session';
+import { clearSession, loadSession, saveSession, type StoredSession } from '../common/session';
 import { SignalingClient } from '../common/signaling';
 import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
 import { needsOrientationPermission, waitForSensorEvent } from '../common/mobileDeviceSensors';
@@ -59,6 +59,9 @@ const ICE_RESTART_DELAY_MS = 2000;
 const enqueue = createQueue((err) => log(`❌ ${String(err)}`));
 
 let signaling: SignalingClient;
+// TURN credentials from the last 'joined', also for a new connection without a new 'joined'
+let iceServers: IceServer[] | undefined;
+// undefined = none yet, or the last one couldn't be restored and is closed
 let pc: RTCPeerConnection | undefined;
 let channel: RTCDataChannel | undefined;
 let reliableChannel: RTCDataChannel | undefined;
@@ -81,6 +84,7 @@ let throttle = 0;
 let brake = 0;
 let inputSeq = 0;
 let inputTimer: number | undefined;
+let pathTimer: number | undefined;
 
 function setStatus(text: string): void {
   statusEl.textContent = text;
@@ -118,7 +122,16 @@ async function main(roomId: string): Promise<void> {
 
   setStatus('Verbinde mit Signaling-Server …');
   signaling = await SignalingClient.connect(handleServerMessage, handleSignalingClose);
-  signaling.send({ type: 'join-room', roomId });
+  // This tab was in this room before (page reloaded): take the slot back instead of joining as a new player
+  const saved = loadSession();
+  if (saved?.roomId === roomId) {
+    roomSession = saved;
+    rejoining = true;
+    log('Gespeicherte Sitzung gefunden – hole den Platz zurück …');
+    signaling.send({ type: 'rejoin-room', roomId, sessionToken: saved.sessionToken });
+  } else {
+    signaling.send({ type: 'join-room', roomId });
+  }
 }
 
 /**
@@ -152,8 +165,7 @@ function giveUp(message: string): void {
   roomSession = undefined;
   rejoining = false;
   clearSession();
-  window.clearTimeout(iceRestartTimer);
-  pc?.close();
+  closeConnection();
   helloButton.disabled = true;
   readyButton.disabled = true;
   showJoinScreen(message);
@@ -284,21 +296,22 @@ setupPedal(byId<HTMLButtonElement>('brake-btn'), (pressed) => (brake = pressed ?
 
 function handleServerMessage(msg: ServerMessage): void {
   switch (msg.type) {
-    case 'joined':
+    case 'joined': {
+      // Rejoined = same player as before, the host still has its car
+      const rejoined = rejoining;
+      rejoining = false;
+      joined = true;
       roomSession = { roomId: msg.roomId, sessionToken: msg.sessionToken };
       saveSession(roomSession);
+      iceServers = msg.iceServers;
       byId('peer-id').textContent = msg.peerId;
-      if (rejoining) {
-        rejoining = false;
-        log(`Raum wieder beigetreten als ${msg.peerId}`);
-        // Signals sent while away got lost: a connection that didn't survive needs a new path
-        if (pc && pc.connectionState !== 'connected') restartIce(pc);
-        break;
-      }
-      joined = true;
-      log(`Raum beigetreten als ${msg.peerId}`);
-      startConnection(msg.roomId, msg.iceServers);
+      log(`Raum ${rejoined ? 'wieder ' : ''}beigetreten als ${msg.peerId}`);
+      // No connection: just joined, the page was reloaded, or the old one couldn't be restored
+      if (!pc) startConnection(msg.roomId, rejoined);
+      // Signals sent while away got lost: a connection that didn't survive needs a new path
+      else if (pc.connectionState !== 'connected') restartIce(pc);
       break;
+    }
     case 'signal': {
       const { data } = msg;
       log(`empfangen: ${data.kind === 'description' ? data.description.type : `ICE-Kandidat (${candidateType(data.candidate.candidate)})`}`);
@@ -332,7 +345,8 @@ function handleServerMessage(msg: ServerMessage): void {
   }
 }
 
-function startConnection(roomId: string, iceServers?: IceServer[]): void {
+/** newConnection: replaces this player's old connection (see SignalData) – the host swaps it in for the same car. */
+function startConnection(roomId: string, newConnection: boolean): void {
   setStatus('Baue WebRTC-Verbindung auf …');
   const connection = new RTCPeerConnection(createRtcConfig(iceServers));
   pc = connection;
@@ -342,10 +356,13 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
   reliableChannel.onopen = () => {
     log('Zuverlässiger DataChannel offen');
     readyButton.disabled = false;
+    // The host starts every new connection as not ready
+    if (ready) sendMessage(reliableChannel, { type: 'ready', ready });
   };
   reliableChannel.onclose = () => {
     log('Zuverlässiger DataChannel geschlossen');
-    readyButton.disabled = true;
+    // A replaced connection's channel may only close once the new one is open
+    if (connection === pc) readyButton.disabled = true;
   };
   reliableChannel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
@@ -377,19 +394,19 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
     setStatus(`Verbunden zu ${roomId}`);
     helloButton.disabled = false;
     log('DataChannel offen');
-    window.setInterval(() => void refreshPath(connection), 2000);
+    pathTimer = window.setInterval(() => void refreshPath(connection), 2000);
     inputTimer = window.setInterval(() => {
       sendMessage(channel, { type: 'input', seq: ++inputSeq, steering: steerValue, throttle, brake });
     }, INPUT_INTERVAL_MS);
     void refreshPath(connection);
   };
   channel.onclose = () => {
+    // Closed here on purpose (closeConnection): whoever closed it takes care of what comes next
+    if (connection !== pc) return;
     setStatus('Verbindung getrennt');
-    window.clearInterval(inputTimer);
     helloButton.disabled = true;
-    // Closed by the host, or the connection is dead for good: an ICE restart can't bring a DataChannel back.
-    // 'closed' = closed here on purpose (giveUp), the join screen is up already.
-    if (connection.connectionState !== 'closed') giveUp('Verbindung zum Host verloren');
+    // Closed by the host, or the connection is dead for good: an ICE restart can't bring a DataChannel back
+    replaceConnection();
   };
   channel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
@@ -411,10 +428,32 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
     signaling.send({
       type: 'signal',
       to: HOST_ID,
-      data: { kind: 'description', description: connection.localDescription!.toJSON() },
+      data: { kind: 'description', description: connection.localDescription!.toJSON(), newConnection },
     });
-    log('Offer gesendet');
+    log(newConnection ? 'Offer für eine neue Verbindung gesendet' : 'Offer gesendet');
   });
+}
+
+/**
+ * Last resort, when nothing can be restored anymore: a new connection for the same player. The host swaps it in
+ * and keeps the car.
+ */
+function replaceConnection(): void {
+  closeConnection();
+  // While rejoining, 'joined' starts it (there's no connection anymore)
+  if (rejoining) return;
+  // The server refused the rejoin: without it no new connection can be negotiated either
+  if (!roomSession) return giveUp('Verbindung zum Host verloren');
+  startConnection(roomSession.roomId, true);
+}
+
+/** Its channels' close events come later and are ignored (connection !== pc). */
+function closeConnection(): void {
+  window.clearTimeout(iceRestartTimer);
+  window.clearInterval(inputTimer);
+  window.clearInterval(pathTimer);
+  pc?.close();
+  pc = undefined;
 }
 
 /**

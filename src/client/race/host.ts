@@ -105,14 +105,19 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'peer-joined':
       addPeer(msg.peerId);
       break;
+    case 'peer-rejoined':
+      // Same player as before – its connection is restored by the phone (ICE restart or a new connection)
+      log(`[${msg.peerId}] wieder mit dem Server verbunden`);
+      break;
     case 'peer-left':
       removePeer(msg.peerId);
       break;
     case 'signal': {
       const peer = peers.get(msg.from);
-      const pc = peer?.pc;
-      if (!peer || !pc) return;
+      if (!peer?.pc) return;
       const { data } = msg;
+      // The phone's old connection is gone for good (page reloaded, or it couldn't be restored)
+      const pc = data.kind === 'description' && data.newConnection ? replaceConnection(peer) : peer.pc;
       log(`[${peer.id}] empfangen: ${data.kind === 'description' ? data.description.type : `ICE-Kandidat (${candidateType(data.candidate.candidate)})`}`);
       peer.enqueue(async () => {
         const reply = await applySignal(pc, data);
@@ -170,8 +175,32 @@ function createPeer(id: PeerId, pc?: RTCPeerConnection): Peer {
 
 function addPeer(id: PeerId): void {
   const pc = new RTCPeerConnection(createRtcConfig(iceServers));
-  const peer = createPeer(id, pc);
+  setupConnection(createPeer(id, pc), pc);
+}
 
+/**
+ * Same player, new connection: the old one can't be restored. The car, color and role stay; the phone gets them
+ * again once the new reliable channel opens (setupReliableChannel).
+ */
+function replaceConnection(peer: Peer): RTCPeerConnection {
+  window.clearInterval(peer.pingTimer);
+  peer.pc?.close();
+  const pc = new RTCPeerConnection(createRtcConfig(iceServers));
+  peer.pc = pc;
+  // The new connection counts its inputs from the start again (a reloaded page does)
+  peer.inputSeq = 0;
+  peer.rttMs = undefined;
+  peer.path = undefined;
+  // A reloaded phone isn't ready anymore – a phone that still is says so again on the new channel
+  if (peer.ready) setReady(peer, false);
+  setupConnection(peer, pc);
+  renderPeer(peer);
+  log(`[${peer.id}] neue Verbindung`);
+  return pc;
+}
+
+function setupConnection(peer: Peer, pc: RTCPeerConnection): void {
+  const { id } = peer;
   pc.onicecandidate = ({ candidate }) => {
     if (!candidate) return;
     signaling.send({ type: 'signal', to: id, data: { kind: 'candidate', candidate: candidate.toJSON() } });
@@ -210,7 +239,10 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
       void refreshPath(peer);
     }, 1000);
   };
-  channel.onclose = () => window.clearInterval(peer.pingTimer);
+  // Not for a replaced connection: its channel may only close once the new one's ping is running
+  channel.onclose = () => {
+    if (peer.channel === channel) window.clearInterval(peer.pingTimer);
+  };
 
   channel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;

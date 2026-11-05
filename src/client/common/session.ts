@@ -20,6 +20,16 @@ export function saveSession(session: StoredSession): void {
   }
 }
 
+/** The session this tab saved last, e.g. before a reload. */
+export function loadSession(): StoredSession | undefined {
+  try {
+    return (JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? 'null') as StoredSession | null) ?? undefined;
+  } catch {
+    // Storage blocked or a broken value: the phone joins as a new player
+    return undefined;
+  }
+}
+
 export function clearSession(): void {
   try {
     sessionStorage.removeItem(STORAGE_KEY);
