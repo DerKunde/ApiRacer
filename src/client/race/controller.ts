@@ -13,7 +13,7 @@ import {
   getConnectionPath,
   sendMessage,
 } from '../common/rtc';
-import { clearSession, saveSession } from '../common/session';
+import { clearSession, saveSession, type StoredSession } from '../common/session';
 import { SignalingClient } from '../common/signaling';
 import { byId, createLogger, hasWebRtcSupport } from '../common/ui';
 import { needsOrientationPermission, waitForSensorEvent } from '../common/mobileDeviceSensors';
@@ -52,6 +52,10 @@ const HOLDING_TEXT: Record<DeviceHolding, string> = {
 const INPUT_INTERVAL_MS = 1000 / 60;
 // How long to wait for a first sensor event before assuming none will come (no permission or no sensors)
 const SENSOR_TIMEOUT_MS = 1000;
+// Pause between attempts to reach the signaling server again (it keeps the slot reserved for 30 s)
+const REJOIN_RETRY_MS = 2000;
+// 'disconnected' is often only a short gap that ICE bridges on its own – restart only if it lasts longer
+const ICE_RESTART_DELAY_MS = 2000;
 const enqueue = createQueue((err) => log(`❌ ${String(err)}`));
 
 let signaling: SignalingClient;
@@ -60,6 +64,11 @@ let channel: RTCDataChannel | undefined;
 let reliableChannel: RTCDataChannel | undefined;
 let helloCount = 0;
 let joined = false;
+// What it takes to get the slot back after losing the server connection; undefined = nothing to take back
+let roomSession: StoredSession | undefined;
+// Server connection lost: reconnecting until the server answers the rejoin
+let rejoining = false;
+let iceRestartTimer: number | undefined;
 let ready = false;
 // The ready button needs all three (updateReadyButton): steering works, a car (host's role message), still the lobby
 let sensorsActive = false;
@@ -108,8 +117,46 @@ async function main(roomId: string): Promise<void> {
   }
 
   setStatus('Verbinde mit Signaling-Server …');
-  signaling = await SignalingClient.connect(handleServerMessage, () => log('Signaling-Verbindung geschlossen'));
+  signaling = await SignalingClient.connect(handleServerMessage, handleSignalingClose);
   signaling.send({ type: 'join-room', roomId });
+}
+
+/**
+ * Server connection lost (screen locked, network switch, server restart). The WebRTC connection may still be up,
+ * but the server only keeps the slot for a while – so take it back with the session token.
+ */
+function handleSignalingClose(): void {
+  log('Signaling-Verbindung geschlossen');
+  // Not in a room (anymore): nothing to take back
+  if (!roomSession) return;
+  // First attempt right away, further ones (closed again before the server answered) after a pause
+  window.setTimeout(() => void rejoin(), rejoining ? REJOIN_RETRY_MS : 0);
+  rejoining = true;
+}
+
+async function rejoin(): Promise<void> {
+  try {
+    signaling = await SignalingClient.connect(handleServerMessage, handleSignalingClose);
+  } catch {
+    if (roomSession) window.setTimeout(() => void rejoin(), REJOIN_RETRY_MS);
+    return;
+  }
+  // Both checks: gave up meanwhile (e.g. the DataChannel closed) → stop trying
+  if (!roomSession) return;
+  log('Signaling-Server wieder erreichbar – hole den Platz zurück …');
+  signaling.send({ type: 'rejoin-room', roomId: roomSession.roomId, sessionToken: roomSession.sessionToken });
+}
+
+/** Nothing left to restore: back to the join screen, ready for the next room – joining again makes a new player. */
+function giveUp(message: string): void {
+  roomSession = undefined;
+  rejoining = false;
+  clearSession();
+  window.clearTimeout(iceRestartTimer);
+  pc?.close();
+  helloButton.disabled = true;
+  readyButton.disabled = true;
+  showJoinScreen(message);
 }
 
 /**
@@ -238,9 +285,17 @@ setupPedal(byId<HTMLButtonElement>('brake-btn'), (pressed) => (brake = pressed ?
 function handleServerMessage(msg: ServerMessage): void {
   switch (msg.type) {
     case 'joined':
-      joined = true;
-      saveSession({ roomId: msg.roomId, sessionToken: msg.sessionToken });
+      roomSession = { roomId: msg.roomId, sessionToken: msg.sessionToken };
+      saveSession(roomSession);
       byId('peer-id').textContent = msg.peerId;
+      if (rejoining) {
+        rejoining = false;
+        log(`Raum wieder beigetreten als ${msg.peerId}`);
+        // Signals sent while away got lost: a connection that didn't survive needs a new path
+        if (pc && pc.connectionState !== 'connected') restartIce(pc);
+        break;
+      }
+      joined = true;
       log(`Raum beigetreten als ${msg.peerId}`);
       startConnection(msg.roomId, msg.iceServers);
       break;
@@ -254,14 +309,22 @@ function handleServerMessage(msg: ServerMessage): void {
     }
     case 'room-closed':
       // The slot is gone with the room, the token can't bring it back
-      clearSession();
-      pc?.close();
-      helloButton.disabled = true;
-      readyButton.disabled = true;
-      // Ready to join the next room
-      showJoinScreen('Host hat den Raum geschlossen');
+      giveUp('Host hat den Raum geschlossen');
+      break;
+    case 'session-taken-over':
+      giveUp('Sitzung wurde woanders fortgesetzt');
       break;
     case 'error':
+      if (rejoining) {
+        // Slot or room gone (away too long, host left, server restarted): nothing to take back
+        rejoining = false;
+        roomSession = undefined;
+        clearSession();
+        // A connection that still works doesn't need the server
+        if (pc?.connectionState === 'connected') log(`${msg.message} – weiter ohne Server`);
+        else giveUp(msg.message);
+        break;
+      }
       // Before 'joined' the error is about joining (e.g. room not found) → back to the code field
       if (joined) setStatus(`❌ ${msg.message}`);
       else showJoinScreen(msg.message);
@@ -324,6 +387,9 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
     setStatus('Verbindung getrennt');
     window.clearInterval(inputTimer);
     helloButton.disabled = true;
+    // Closed by the host, or the connection is dead for good: an ICE restart can't bring a DataChannel back.
+    // 'closed' = closed here on purpose (giveUp), the join screen is up already.
+    if (connection.connectionState !== 'closed') giveUp('Verbindung zum Host verloren');
   };
   channel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
@@ -335,7 +401,10 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
     signaling.send({ type: 'signal', to: HOST_ID, data: { kind: 'candidate', candidate: candidate.toJSON() } });
     log(`eigener ICE-Kandidat gesendet (${candidate.type ?? candidateType(candidate.candidate)})`);
   };
-  connection.onconnectionstatechange = () => log(`Verbindungsstatus: ${connection.connectionState}`);
+  connection.onconnectionstatechange = () => {
+    log(`Verbindungsstatus: ${connection.connectionState}`);
+    handleConnectionState(connection);
+  };
 
   enqueue(async () => {
     await connection.setLocalDescription(); // creates the offer
@@ -345,6 +414,41 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
       data: { kind: 'description', description: connection.localDescription!.toJSON() },
     });
     log('Offer gesendet');
+  });
+}
+
+/**
+ * Restores a broken connection instead of replacing it: an ICE restart looks for a new network path (e.g. after
+ * switching from Wi-Fi to mobile data), while the DataChannels and the host's player stay the same.
+ */
+function handleConnectionState(connection: RTCPeerConnection): void {
+  window.clearTimeout(iceRestartTimer);
+  if (connection.connectionState === 'disconnected') {
+    iceRestartTimer = window.setTimeout(() => restartIce(connection), ICE_RESTART_DELAY_MS);
+  } else if (connection.connectionState === 'failed') {
+    restartIce(connection);
+  }
+}
+
+/** The phone always makes the offer, also for a restart – the host answers it on its existing connection. */
+function restartIce(connection: RTCPeerConnection): void {
+  window.clearTimeout(iceRestartTimer);
+  // The new path is negotiated over the server: while rejoining, 'joined' starts the restart
+  if (rejoining) return;
+  // The server refused the rejoin: without it a failed connection can't be restored
+  if (!roomSession) {
+    if (connection.connectionState === 'failed') giveUp('Verbindung zum Host verloren');
+    return;
+  }
+  log('ICE-Neustart …');
+  enqueue(async () => {
+    await connection.setLocalDescription(await connection.createOffer({ iceRestart: true }));
+    signaling.send({
+      type: 'signal',
+      to: HOST_ID,
+      data: { kind: 'description', description: connection.localDescription!.toJSON() },
+    });
+    log('ICE-Neustart: Offer gesendet');
   });
 }
 
