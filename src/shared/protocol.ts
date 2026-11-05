@@ -9,6 +9,8 @@
  *  4. Afterwards all data flows directly over the RTCDataChannel, the server is out of the loop
  *  5. If a phone loses its connection to the server, its slot stays reserved for a while: with 'rejoin-room' and
  *     its session token it gets the same peer ID back, and the host is told it's the same player again
+ *  6. A broken WebRTC connection is restored with an ICE restart. Only if that's impossible (page reloaded,
+ *     DataChannels closed) the phone sets up a new one, and the host swaps it in for the same player
  */
 
 export type PeerId = string;
@@ -38,7 +40,9 @@ export interface IceCandidate {
 
 /** Payload the server passes between two peers without interpreting it. */
 export type SignalData =
-  | { kind: 'description'; description: SessionDescription }
+  // newConnection: phone → host, with the first offer of a connection that replaces the player's old one – the host
+  // drops the old connection and answers on a new one, the player (car, color, role) stays
+  | { kind: 'description'; description: SessionDescription; newConnection?: boolean }
   | { kind: 'candidate'; candidate: IceCandidate };
 
 /** Browser → Server */
