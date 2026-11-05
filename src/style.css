@@ -787,6 +787,25 @@ body[data-mode='race'] .debug-panel.open {
   display: none;
 }
 
+/* Countdown across the middle of the race view (showBanner in threeRaceView.ts).
+   White with a shadow: readable on road, grass and sky, in both color schemes. */
+.race-banner {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  font-size: clamp(3rem, 10vw, 7rem);
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 2px 12px rgb(0 0 0 / 0.6);
+  pointer-events: none;
+}
+
+.race-banner[hidden] {
+  display: none;
+}
+
 /* Connected phones: one card each (createPeerCard in hostDashboard.ts) */
 .peer-list {
   list-style: none;

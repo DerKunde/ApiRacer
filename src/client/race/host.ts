@@ -22,6 +22,17 @@ import { ThreeRaceView } from './threeRaceView';
 
 // Peer card rows, in display order
 const DETAILS = ['Weg', 'Bereit', 'Lenkwert', 'Gas', 'Bremse'] as const;
+// Countdown before the race in seconds – the cars stand on the start grid meanwhile
+const COUNTDOWN_SECONDS = 3;
+// How long "Los!" stays on screen once the cars are released
+const GO_MESSAGE_MS = 1000;
+// The phone sends 60 inputs per second. This much silence = connection gone or phone asleep → release the pedals,
+// or the car keeps driving with the last input until the DataChannel finally closes.
+const INPUT_TIMEOUT_MS = 500;
+const NEUTRAL_INPUT: DriverInput = { steering: 0, throttle: 0, brake: 0 };
+
+// lobby: cars may drive around freely · countdown: cars stand on the grid · race: running
+type RacePhase = 'lobby' | 'countdown' | 'race';
 
 interface Peer {
   id: PeerId;
@@ -39,6 +50,8 @@ interface Peer {
   rttMs?: number;
   path?: string;
   pingTimer?: number;
+  // Restarted with every input message, fires only once they stop (INPUT_TIMEOUT_MS)
+  inputTimeout?: number;
   inputSeq: number;
   steerValue?: number;
   throttle?: number;
@@ -56,7 +69,7 @@ const JOIN_PAGE = '/controller.html';
 const peers = new Map<PeerId, Peer>();
 let signaling: SignalingClient;
 let iceServers: IceServer[] | undefined;
-let raceStarted = false;
+let phase: RacePhase = 'lobby';
 
 async function main(): Promise<void> {
   await initPhysics();
@@ -199,6 +212,9 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
         peer.card.root.classList.add('flash');
         break;
       case 'input':
+        // Before the seq check: a late message still proves the phone is there
+        window.clearTimeout(peer.inputTimeout);
+        peer.inputTimeout = window.setTimeout(() => applyInput(peer, NEUTRAL_INPUT), INPUT_TIMEOUT_MS);
         if (msg.seq > peer.inputSeq) {
           peer.inputSeq = msg.seq;
           applyInput(peer, { steering: msg.steering, throttle: msg.throttle, brake: msg.brake });
@@ -213,8 +229,20 @@ function applyInput(peer: Peer, input: DriverInput): void {
   peer.throttle = input.throttle;
   peer.brake = input.brake;
   // Spectators have no car – the view ignores unknown IDs
-  view.updateInput(peer.id, input);
+  view.updateInput(peer.id, carInput(peer));
   renderPeer(peer);
+}
+
+// The card always shows what the phone sends (the player sees it works), but during the countdown the car stands still
+function carInput(peer: Peer): DriverInput {
+  if (phase === 'countdown') return NEUTRAL_INPUT;
+  return { steering: peer.steerValue ?? 0, throttle: peer.throttle ?? 0, brake: peer.brake ?? 0 };
+}
+
+// Applies to every car right away, not only with its next input – a test player sends nothing while no key changes
+function setPhase(next: RacePhase): void {
+  phase = next;
+  for (const peer of peers.values()) view.updateInput(peer.id, carInput(peer));
 }
 
 function setupReliableChannel(peer: Peer, channel: RTCDataChannel): void {
@@ -246,20 +274,40 @@ function countReady(): { ready: number; total: number } {
 
 /** Start is only possible with at least one racer and once all of them are ready. */
 function updateStartButton(): void {
-  if (raceStarted) return;
+  if (phase !== 'lobby') return;
   const { ready, total } = countReady();
   startButton.disabled = total === 0 || ready < total;
   byId('ready-count').textContent = total === 0 ? 'Warte auf Fahrer …' : `${ready}/${total} bereit`;
 }
 
-startButton.addEventListener('click', () => {
-  raceStarted = true;
+startButton.addEventListener('click', () => void startRace());
+
+async function startRace(): Promise<void> {
   startButton.disabled = true;
-  byId('ready-count').textContent = 'Rennen läuft';
   // Spectators get it too, so every phone knows the lobby is over
   for (const peer of peers.values()) sendMessage(peer.reliableChannel, { type: 'race-start' });
+  setPhase('countdown');
+  // Everyone back on the grid, also whoever drove around in the lobby
+  view.resetCars();
+  byId('ready-count').textContent = 'Countdown …';
+  log('🚦 Countdown');
+  for (let n = COUNTDOWN_SECONDS; n > 0; n--) {
+    view.showBanner(String(n));
+    await delay(1000);
+  }
+
+  // Released with whatever the players hold right now – flooring it during the countdown is allowed
+  setPhase('race');
+  byId('ready-count').textContent = 'Rennen läuft';
+  view.showBanner('Los!');
   log('🏁 Rennen gestartet');
-});
+  await delay(GO_MESSAGE_MS);
+  view.showBanner(undefined);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 async function refreshPath(peer: Peer): Promise<void> {
   if (!peer.pc) return;
@@ -284,6 +332,7 @@ function removePeer(id: PeerId): void {
   const peer = peers.get(id);
   if (!peer) return;
   window.clearInterval(peer.pingTimer);
+  window.clearTimeout(peer.inputTimeout);
   peer.pc?.close();
   peer.card.root.remove();
   if (peer.racer) view.removePlayer(id);
@@ -302,7 +351,7 @@ function addTestButtons(): void {
 
   const takeControl = (peer: Peer): void => {
     // Release the pedals of the previous one, or it would keep driving with the last input
-    if (controlled) applyInput(controlled, { steering: 0, throttle: 0, brake: 0 });
+    if (controlled) applyInput(controlled, NEUTRAL_INPUT);
     controlled = peer;
     sendKeyboardInput();
   };

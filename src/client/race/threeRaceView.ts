@@ -51,6 +51,7 @@ export class ThreeRaceView implements RaceView {
     private readonly renderer = new THREE.WebGLRenderer({ antialias: true });
     private readonly overviewCamera = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
     private readonly overlay = document.createElement('p');
+    private readonly banner = document.createElement('p');
     private readonly dividerColor: THREE.Color;
     // Canvas size in CSS pixels, reused every frame instead of allocating a new Vector2
     private readonly size = new THREE.Vector2();
@@ -82,6 +83,10 @@ export class ThreeRaceView implements RaceView {
         this.overlay.className = 'race-overlay';
         this.overlay.textContent = 'Warte auf Spieler …';
         container.append(this.overlay);
+
+        this.banner.className = 'race-banner';
+        this.banner.hidden = true;
+        container.append(this.banner);
 
         const style = getComputedStyle(container);
         this.scene.background = new THREE.Color(style.getPropertyValue('--surface').trim());
@@ -159,6 +164,12 @@ export class ThreeRaceView implements RaceView {
 
     resetCars(): void {
         for (const car of this.cars.values()) this.placeOnGrid(car);
+    }
+
+    // Big text across the middle of the view (countdown), shown until called with undefined
+    showBanner(text: string | undefined): void {
+        this.banner.textContent = text ?? '';
+        this.banner.hidden = text === undefined;
     }
 
     // overlay: whatever the editor wants to show on the map, shown until stopEditing
