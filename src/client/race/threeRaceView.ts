@@ -1,6 +1,7 @@
 import type { PeerId } from '../../shared/protocol';
 import type { TrackLayout } from '../../shared/trackLayout';
-import { MAX_WHEEL_ANGLE, WHEEL_POSITIONS, WHEEL_RADIUS, type CarPhysics } from './carPhysics';
+import { MAX_WHEEL_ANGLE, WHEEL_POSITIONS, type CarPhysics } from './carPhysics';
+import { CAR_DESIGNS, createCarModel } from './carModel';
 import { RacePhysics } from './racePhysics';
 import { MAX_RACERS, type DriverInput, type RaceView } from './raceView';
 import { splitScreenLayout, type Viewport } from './splitScreenLayout';
@@ -304,35 +305,9 @@ export class ThreeRaceView implements RaceView {
         return ground;
     }
 
-    // Car model: forward = −z (three.js convention, like cameras)
+    // Car model: forward = −z (three.js convention, like cameras). The slot picks the model, so cars in a race differ.
     private createCar(color: THREE.Color, slot: number): Car {
-        const root = new THREE.Group();
-
-        const body = new THREE.Mesh(
-            new THREE.BoxGeometry(1.8, 0.6, 4),
-            new THREE.MeshStandardMaterial({ color, metalness: 0.2, roughness: 0.5 }),
-        );
-        body.position.y = 0.6;
-        const cabin = new THREE.Mesh(
-            new THREE.BoxGeometry(1.5, 0.5, 2),
-            new THREE.MeshStandardMaterial({ color: 0x222831, roughness: 0.3 }),
-        );
-        cabin.position.set(0, 1.15, 0.3);
-        root.add(body, cabin);
-
-        const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
-        const wheels = WHEEL_POSITIONS.map(({ x, z }) => {
-            // Cylinder axis is y → turn it onto x so the wheel rolls forward
-            const wheel = new THREE.Mesh(new THREE.CylinderGeometry(WHEEL_RADIUS, WHEEL_RADIUS, 0.3, 16), wheelMaterial);
-            wheel.rotation.z = Math.PI / 2;
-            // Own pivot group: steering rotates the pivot around y, the wheel keeps its own tilt inside it.
-            // Its height comes from the suspension every frame.
-            const pivot = new THREE.Group();
-            pivot.position.set(x, WHEEL_RADIUS, z);
-            pivot.add(wheel);
-            root.add(pivot);
-            return pivot;
-        });
+        const { root, wheels } = createCarModel(CAR_DESIGNS[slot % CAR_DESIGNS.length], color);
         const frontWheels = wheels.filter((_, i) => WHEEL_POSITIONS[i].z < 0);
 
         // Aspect is set per frame in renderView (depends on the viewport)
@@ -356,7 +331,7 @@ export class ThreeRaceView implements RaceView {
     }
 
     // Removing from the scene only stops drawing – geometries and materials keep their GPU buffers until disposed.
-    // A Set collects each material once (the wheel material is shared by all four wheels).
+    // A Set collects each material once (a car shares its materials between many parts, e.g. all four wheels).
     private disposeCar(car: Car): void {
         car.root.removeFromParent();
         car.cameraRig.removeFromParent();
