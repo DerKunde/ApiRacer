@@ -33,7 +33,7 @@
         <div class="race-controls">
           <button type="button" id="brake-btn" class="pedal pedal-brake">Bremse</button>
           <div class="race-center">
-            <!-- Toggle, only shown once the motion sensors work (startSensors in controller.ts) – without steering there is no point in starting -->
+            <!-- Toggle, only shown with working motion sensors, a car and while in the lobby (updateReadyButton in controller.ts) -->
             <button type="button" id="ready-btn" class="big ready-btn" aria-pressed="false" disabled hidden>Bereit</button>
             <p class="status" id="status">…</p>
             <button type="button" id="debug-open-btn" class="debug-btn" aria-controls="debug-panel" aria-expanded="false">Debug</button>

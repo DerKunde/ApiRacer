@@ -68,6 +68,9 @@ export type ChannelMessage =
   | { type: 'orientation'; seq: number; quaternion: [x: number, y: number, z: number, w: number]; absolute: boolean }
   | { type: 'peer-color'; color: string }
   // Lobby, over the reliable channel: no seq needed – nothing gets lost, and the order stays as sent.
-  // ready: phone → PC, toggled by the ready button. race-start: PC → all phones, once every racer is ready.
+  // ready: phone → PC, toggled by the ready button.
+  // role: PC → phone, once the channel is open and whenever it changes. racer: false = spectator, no car.
+  // race-start: PC → all phones when the host starts the race, and to every phone whose channel opens after that.
   | { type: 'ready'; ready: boolean }
+  | { type: 'role'; racer: boolean }
   | { type: 'race-start' };

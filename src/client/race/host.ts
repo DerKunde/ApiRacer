@@ -42,8 +42,14 @@ interface Peer {
   reliableChannel?: RTCDataChannel;
   enqueue: (task: () => Promise<void>) => void;
   card: PeerCard<(typeof DETAILS)[number]>;
+  // Button row below the card details – dev test players add their controls to it as well
+  actions: HTMLElement;
+  // Lobby only, for racers: takes the car away from someone who can't get ready (makeSpectator)
+  spectateButton: HTMLButtonElement;
+  // Dev test players: WASD radio and ready button – only shown while the player has a car
+  racerControls?: HTMLElement[];
   color: string;
-  // false = joined when the race was full → connected, but no car
+  // false = joined when the race was full, or made a spectator by the host → connected, but no car
   racer: boolean;
   // Set by the phone's ready button; only counts for racers
   ready: boolean;
@@ -140,7 +146,18 @@ function createPeer(id: PeerId, pc?: RTCPeerConnection): Peer {
   // Only the first MAX_RACERS phones get a car; later ones stay connected (card + log) without one.
   // No moving up when a racer leaves – keeps it simple until there is a real race start.
   const racer = countRacers() < MAX_RACERS;
-  const peer: Peer = { id, pc, card, color, racer, ready: false, enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), inputSeq: 0 };
+  const actions = document.createElement('div');
+  actions.className = 'peer-actions';
+  const spectateButton = document.createElement('button');
+  spectateButton.textContent = 'Zum Zuschauer';
+  spectateButton.title = 'Auto wegnehmen – für einen Fahrer, der nicht bereit werden kann und so den Start blockiert';
+  actions.append(spectateButton);
+  card.root.append(actions);
+  const peer: Peer = {
+    id, pc, card, actions, spectateButton, color, racer, ready: false,
+    enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), inputSeq: 0,
+  };
+  spectateButton.addEventListener('click', () => makeSpectator(peer));
   peers.set(id, peer);
   renderPeer(peer);
   // A new racer isn't ready yet → locks the start again
@@ -239,10 +256,14 @@ function carInput(peer: Peer): DriverInput {
   return { steering: peer.steerValue ?? 0, throttle: peer.throttle ?? 0, brake: peer.brake ?? 0 };
 }
 
-// Applies to every car right away, not only with its next input – a test player sends nothing while no key changes
+// Applies to every car right away, not only with its next input – a test player sends nothing while no key changes.
+// renderPeer: the lobby-only buttons on the cards go away.
 function setPhase(next: RacePhase): void {
   phase = next;
-  for (const peer of peers.values()) view.updateInput(peer.id, carInput(peer));
+  for (const peer of peers.values()) {
+    view.updateInput(peer.id, carInput(peer));
+    renderPeer(peer);
+  }
 }
 
 function setupReliableChannel(peer: Peer, channel: RTCDataChannel): void {
@@ -251,11 +272,16 @@ function setupReliableChannel(peer: Peer, channel: RTCDataChannel): void {
   channel.onopen = () => {
     log(`[${peer.id}] zuverlässiger DataChannel offen`);
     sendMessage(channel, { type: 'peer-color', color: peer.color });
+    // Everything the phone has missed until now: its role, and whether the lobby is already over – a phone that
+    // joins during the countdown or the race, or whose channel only opens then, never got the race-start
+    sendMessage(channel, { type: 'role', racer: peer.racer });
+    if (phase !== 'lobby') sendMessage(channel, { type: 'race-start' });
   };
   channel.onclose = () => log(`[${peer.id}] zuverlässiger DataChannel geschlossen`);
   channel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
-    if (msg.type === 'ready') setReady(peer, msg.ready);
+    // Only racers count for the start – e.g. a message sent just before the host made the phone a spectator
+    if (msg.type === 'ready' && peer.racer) setReady(peer, msg.ready);
   };
 }
 
@@ -266,13 +292,29 @@ function setReady(peer: Peer, ready: boolean): void {
   updateStartButton();
 }
 
+/**
+ * Lobby only: takes the car away from a racer who can't get ready – no motion sensors, sensor permission denied, or
+ * simply away. Otherwise that one racer blocks the start for everyone. The phone stays connected as a spectator.
+ */
+function makeSpectator(peer: Peer): void {
+  if (!peer.racer || phase !== 'lobby') return;
+  peer.racer = false;
+  peer.ready = false;
+  view.removePlayer(peer.id);
+  sendMessage(peer.reliableChannel, { type: 'role', racer: false });
+  log(`[${peer.id}] ist jetzt Zuschauer`);
+  renderPeer(peer);
+  // Maybe the last one who wasn't ready → the start unlocks
+  updateStartButton();
+}
+
 /** Racers that are ready and racers in total – spectators don't count, they have no car. */
 function countReady(): { ready: number; total: number } {
   const racers = [...peers.values()].filter((peer) => peer.racer);
   return { ready: racers.filter((peer) => peer.ready).length, total: racers.length };
 }
 
-/** Start is only possible with at least one racer and once all of them are ready. */
+/** Start is only possible with at least one racer and once all of them are ready (or made spectators). */
 function updateStartButton(): void {
   if (phase !== 'lobby') return;
   const { ready, total } = countReady();
@@ -326,6 +368,8 @@ function renderPeer(peer: Peer): void {
   details.Bremse.textContent = peer.racer ? (peer.brake?.toFixed(2) ?? 'nA') : '–';
   // Empty until the first pong → CSS hides it together with its "·" separator (.peer-rtt:empty)
   rtt.textContent = peer.rttMs === undefined ? '' : `${peer.rttMs.toFixed(1)} ms`;
+  peer.spectateButton.hidden = !peer.racer || phase !== 'lobby';
+  for (const control of peer.racerControls ?? []) control.hidden = !peer.racer;
 }
 
 function removePeer(id: PeerId): void {
@@ -361,8 +405,6 @@ function addTestButtons(): void {
   addButton.addEventListener('click', () => {
     const peer = createPeer(`test-${nextTestId++}`);
 
-    const controls = document.createElement('div');
-    controls.className = 'test-buttons';
     // Spectators have no car to drive and can't get ready, same as on the host's count
     if (peer.racer) {
       // Same name = the browser keeps only one of them checked
@@ -370,14 +412,13 @@ function addTestButtons(): void {
       controlRadio.type = 'radio';
       controlRadio.name = 'test-control';
       controlRadio.addEventListener('change', () => takeControl(peer));
-      // First one is ready to drive right away
-      if (!controlled) {
+      // Ready to drive right away if WASD drives nothing yet – or only a spectator, whose radio is hidden
+      if (!controlled?.racer) {
         controlRadio.checked = true;
         takeControl(peer);
       }
       const controlLabel = document.createElement('label');
       controlLabel.append(controlRadio, ' Steuern');
-      controls.append(controlLabel);
 
       const readyButton = document.createElement('button');
       readyButton.textContent = 'Bereit';
@@ -385,7 +426,9 @@ function addTestButtons(): void {
         setReady(peer, !peer.ready);
         readyButton.textContent = peer.ready ? '✅ Bereit' : 'Bereit';
       });
-      controls.append(readyButton);
+      // In front of "Zum Zuschauer"; renderPeer hides them once the player is a spectator
+      peer.actions.prepend(controlLabel, readyButton);
+      peer.racerControls = [controlLabel, readyButton];
     }
     const removeButton = document.createElement('button');
     removeButton.textContent = 'Entfernen';
@@ -393,8 +436,7 @@ function addTestButtons(): void {
       if (controlled === peer) controlled = undefined;
       removePeer(peer.id);
     });
-    controls.append(removeButton);
-    peer.card.root.append(controls);
+    peer.actions.append(removeButton);
   });
 
   // KeyboardEvent.code = physical key, independent of layout and caps lock.

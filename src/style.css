@@ -967,9 +967,18 @@ body[data-mode='race'] .debug-panel.open {
   margin: 0 0 12px;
 }
 
-.peer-card .test-buttons {
+/* Race host: buttons below a peer card's details – "Zum Zuschauer" in the lobby, plus a dev test player's controls */
+.peer-actions {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 8px;
   margin: 8px 0 0;
+}
+
+/* All buttons hidden (spectator, or the race has started) → no empty row with its margin */
+.peer-actions:not(:has(> :not([hidden]))) {
+  display: none;
 }
 
 /* Canvas is inline by default → small gap below it */

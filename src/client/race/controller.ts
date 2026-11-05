@@ -60,6 +60,11 @@ let reliableChannel: RTCDataChannel | undefined;
 let helloCount = 0;
 let joined = false;
 let ready = false;
+// The ready button needs all three (updateReadyButton): steering works, a car (host's role message), still the lobby
+let sensorsActive = false;
+// Until the host says otherwise – its role message comes right after the reliable channel opens
+let racer = true;
+let raceStarted = false;
 let holding: DeviceHolding = 'portrait';
 let steerValue = 0;
 let throttle = 0;
@@ -136,7 +141,8 @@ async function hasSensorData(): Promise<boolean> {
 
 function startSensors(): void {
   sensorOverlay.hidden = true;
-  readyButton.hidden = false;
+  sensorsActive = true;
+  updateReadyButton();
   // Race mode: only pedals and ready button fill the screen, the rest moves behind the debug button (style.css).
   // Not if joining failed meanwhile – the fixed controls would cover the join screen.
   if (!session.hidden) document.body.dataset.mode = 'race';
@@ -276,14 +282,26 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
   };
   reliableChannel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
-    if (msg.type === 'peer-color') {
-      byId('body').style.backgroundColor = msg.color;
-    }
-    // Lobby is over: changing your mind about being ready no longer matters
-    if (msg.type === 'race-start') {
-      readyButton.hidden = true;
-      setStatus('Rennen läuft');
-      log('🏁 Rennen gestartet');
+    switch (msg.type) {
+      case 'peer-color':
+        byId('body').style.backgroundColor = msg.color;
+        break;
+      // Race full when joining, or the host took the car away (e.g. because this phone can't get ready)
+      case 'role':
+        racer = msg.racer;
+        updateReadyButton();
+        if (!racer) {
+          setStatus('Zuschauer – du hast kein Auto');
+          log('Kein Auto: du schaust zu');
+        }
+        break;
+      // Lobby is over: changing your mind about being ready no longer matters
+      case 'race-start':
+        raceStarted = true;
+        updateReadyButton();
+        setStatus(racer ? 'Rennen läuft' : 'Rennen läuft – du schaust zu');
+        log('🏁 Rennen gestartet');
+        break;
     }
   };
 
@@ -329,6 +347,14 @@ function startConnection(roomId: string, iceServers?: IceServer[]): void {
 async function refreshPath(connection: RTCPeerConnection): Promise<void> {
   const path = await getConnectionPath(connection);
   byId('path').textContent = path ? describePath(path) : '–';
+}
+
+/**
+ * Shown only with steering (no point in racing without it), with a car and while the lobby lasts. The sensors and
+ * the host's messages arrive in any order – e.g. a late joiner gets race-start before its sensors are found.
+ */
+function updateReadyButton(): void {
+  readyButton.hidden = !sensorsActive || !racer || raceStarted;
 }
 
 readyButton.addEventListener('click', () => {
