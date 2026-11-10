@@ -62,6 +62,8 @@ const ICE_RESTART_DELAY_MS = 2000;
 // The host answers an ICE-restart offer within moments. No answer: the server connection is probably dead without
 // the browser noticing (network switch) and the offer got lost – so reconnect to the server and restart again.
 const ICE_RESTART_ANSWER_TIMEOUT_MS = 5000;
+// The reliable channel delivers as long as the connection lives: no answer by then means it is most likely gone
+const READY_ANSWER_TIMEOUT_MS = 3000;
 const enqueue = createQueue((err) => log(`❌ ${String(err)}`));
 
 let signaling: SignalingClient;
@@ -81,7 +83,15 @@ let rejoining = false;
 let rejoinStartedAt = 0;
 let iceRestartTimer: number | undefined;
 let restartAnswerTimer: number | undefined;
+// As the host has recorded it (ready-state): the button shows this, not what was tapped
 let ready = false;
+// Sent, but not answered by the host yet
+let readyRequest: { ready: boolean; seq: number } | undefined;
+let readySeq = 0;
+// readyRequest got no answer within READY_ANSWER_TIMEOUT_MS
+let readyTimedOut = false;
+let readyTimer: number | undefined;
+let reliableOpen = false;
 // The ready button needs all three (updateReadyButton): steering works, a car (host's role message), still the lobby
 let sensorsActive = false;
 // Until the host says otherwise – its role message comes right after the reliable channel opens
@@ -234,8 +244,10 @@ function giveUp(message: string): void {
   // session back. Joining again reloads the page with a new connection anyway.
   signaling.close();
   closeConnection();
+  // No connection left to send it again on
+  clearReadyRequest();
+  updateReadyButton();
   helloButton.disabled = true;
-  readyButton.disabled = true;
   showJoinScreen(message);
 }
 
@@ -434,14 +446,18 @@ function startConnection(newConnection: boolean): void {
   reliableChannel = connection.createDataChannel(RELIABLE_CHANNEL_LABEL, RELIABLE_CHANNEL_OPTIONS);
   reliableChannel.onopen = () => {
     log('Zuverlässiger DataChannel offen');
-    readyButton.disabled = false;
-    // The host starts every new connection as not ready
-    if (ready) sendMessage(reliableChannel, { type: 'ready', ready });
+    reliableOpen = true;
+    // The host starts every new connection as not ready: ask again for what it had confirmed, or for what was still
+    // on its way when the old connection broke
+    const wanted = readyRequest ? readyRequest.ready : ready;
+    clearReadyRequest();
+    if (wanted) sendReady(true);
+    else updateReadyButton();
   };
   reliableChannel.onclose = () => {
     log('Zuverlässiger DataChannel geschlossen');
     // A replaced connection's channel may only close once the new one is open
-    if (connection === pc) readyButton.disabled = true;
+    if (connection === pc) handleReliableChannelGone();
   };
   reliableChannel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
@@ -455,6 +471,9 @@ function startConnection(newConnection: boolean): void {
         updateReadyButton();
         setConnectedStatus();
         if (!racer) log('Kein Auto: du schaust zu');
+        break;
+      case 'ready-state':
+        handleReadyState(msg);
         break;
       // Lobby is over: changing your mind about being ready no longer matters
       case 'race-start':
@@ -532,6 +551,8 @@ function closeConnection(): void {
   window.clearInterval(pathTimer);
   pc?.close();
   pc = undefined;
+  // Its channels' close events are ignored from now on
+  handleReliableChannelGone();
 }
 
 /**
@@ -614,14 +635,59 @@ async function refreshPath(connection: RTCPeerConnection): Promise<void> {
  */
 function updateReadyButton(): void {
   readyButton.hidden = !sensorsActive || !racer || raceStarted;
+  // Locked while waiting for the host: a second tap would only race the first one
+  const waiting = readyRequest !== undefined && !readyTimedOut;
+  readyButton.disabled = !reliableOpen || waiting;
+  readyButton.setAttribute('aria-pressed', String(ready));
+  readyButton.setAttribute('aria-busy', String(waiting));
+  readyButton.textContent = readyButtonText();
 }
 
-readyButton.addEventListener('click', () => {
-  ready = !ready;
-  readyButton.setAttribute('aria-pressed', String(ready));
-  readyButton.textContent = ready ? '✅ Bereit – tippen zum Zurücknehmen' : 'Bereit';
-  sendMessage(reliableChannel, { type: 'ready', ready });
-});
+function readyButtonText(): string {
+  if (readyTimedOut) return '⚠️ Keine Antwort vom Host – tippen zum Wiederholen';
+  if (readyRequest) return readyRequest.ready ? '⏳ Wird gemeldet …' : '⏳ Wird zurückgenommen …';
+  return ready ? '✅ Bereit – tippen zum Zurücknehmen' : 'Bereit';
+}
+
+function sendReady(value: boolean): void {
+  readyRequest = { ready: value, seq: ++readySeq };
+  readyTimedOut = false;
+  window.clearTimeout(readyTimer);
+  readyTimer = window.setTimeout(() => {
+    readyTimedOut = true;
+    log('⚠️ Keine Antwort vom Host auf „Bereit“');
+    updateReadyButton();
+  }, READY_ANSWER_TIMEOUT_MS);
+  sendMessage(reliableChannel, { type: 'ready', ...readyRequest });
+  updateReadyButton();
+}
+
+// The host's answer to a request (with seq), or a change it made on its own (without)
+function handleReadyState(msg: { ready: boolean; seq?: number }): void {
+  ready = msg.ready;
+  // The answer to an older request – sent again after a timeout – doesn't end the wait for the newer one
+  if (readyRequest && msg.seq !== undefined && msg.seq >= readyRequest.seq) clearReadyRequest();
+  updateReadyButton();
+}
+
+function clearReadyRequest(): void {
+  readyRequest = undefined;
+  readyTimedOut = false;
+  window.clearTimeout(readyTimer);
+}
+
+/**
+ * No answer can come on this channel anymore. A request still on its way stays: the next connection's reliable
+ * channel sends it again (reliableChannel.onopen), the button shows it as on its way until then.
+ */
+function handleReliableChannelGone(): void {
+  reliableOpen = false;
+  window.clearTimeout(readyTimer);
+  updateReadyButton();
+}
+
+// A tap toggles the state the host confirmed. After a timeout it sends the unanswered request again instead.
+readyButton.addEventListener('click', () => sendReady(readyRequest ? readyRequest.ready : !ready));
 
 function setDebugPanelOpen(open: boolean): void {
   byId('debug-panel').classList.toggle('open', open);

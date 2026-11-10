@@ -397,7 +397,7 @@ body[data-mode='race'] .debug-panel.open {
   transform: scale(0.97);
 }
 
-/* aria-pressed is set by the click handler in controller.ts */
+/* aria-pressed = ready as confirmed by the host, set by updateReadyButton in controller.ts */
 .ready-btn[aria-pressed='true'] {
   background: var(--ok);
 }

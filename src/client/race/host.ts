@@ -346,16 +346,20 @@ function setupReliableChannel(peer: Peer, channel: RTCDataChannel): void {
   channel.onopen = () => {
     log(`[${peer.id}] zuverlässiger DataChannel offen`);
     sendMessage(channel, { type: 'peer-color', color: peer.color });
-    // Everything the phone has missed until now: its role, and whether the lobby is already over – a phone that
-    // joins during the countdown or the race, or whose channel only opens then, never got the race-start
+    // Everything the phone has missed until now: its role, its ready state, and whether the lobby is already over –
+    // a phone that joins during the countdown or the race, or whose channel only opens then, never got the race-start
     sendMessage(channel, { type: 'role', racer: peer.racer });
+    sendMessage(channel, { type: 'ready-state', ready: peer.ready });
     if (phase !== 'lobby') sendMessage(channel, { type: 'race-start' });
   };
   channel.onclose = () => log(`[${peer.id}] zuverlässiger DataChannel geschlossen`);
   channel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
+    if (msg.type !== 'ready') return;
     // Only racers count for the start – e.g. a message sent just before the host made the phone a spectator
-    if (msg.type === 'ready' && peer.racer) setReady(peer, msg.ready);
+    if (peer.racer) setReady(peer, msg.ready);
+    // Answered either way: until the answer arrives, the phone shows the request as on its way
+    sendMessage(channel, { type: 'ready-state', ready: peer.ready, seq: msg.seq });
   };
 }
 
@@ -376,6 +380,7 @@ function makeSpectator(peer: Peer): void {
   peer.ready = false;
   view.removePlayer(peer.id);
   sendMessage(peer.reliableChannel, { type: 'role', racer: false });
+  sendMessage(peer.reliableChannel, { type: 'ready-state', ready: false });
   log(`[${peer.id}] ist jetzt Zuschauer`);
   renderPeer(peer);
   // Maybe the last one who wasn't ready → the start unlocks
