@@ -164,7 +164,14 @@ wss.on('connection', (ws) => {
       send(ws, { type: 'error', message: 'Ungültige Nachricht' });
       return;
     }
-    handleMessage(ws, msg);
+    // The shape isn't checked: valid JSON like `null` or a signal without data throws in handleMessage.
+    // Uncaught, that would end the process and take down every room.
+    try {
+      handleMessage(ws, msg);
+    } catch (error) {
+      console.error('Fehler beim Verarbeiten der Nachricht:', error);
+      send(ws, { type: 'error', message: 'Fehler beim Verarbeiten der Nachricht' });
+    }
   });
   ws.on('close', () => handleClose(ws));
 });

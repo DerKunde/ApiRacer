@@ -11,8 +11,13 @@ on:
 concurrency: deploy
 
 jobs:
+  # Typecheck, build and tests: the tagged commit has to pass them before anything gets deployed
+  check:
+    uses: ./.github/workflows/ci.yml
+
   # Signaling server on the VPS. Every deploy restarts it, which drops all open rooms.
   deploy-relay:
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - name: Deploy signaling server via SSH

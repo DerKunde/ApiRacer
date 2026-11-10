@@ -1,5 +1,5 @@
 {
-  // Node code (signaling server and Vite config)
+  // Node code (signaling server with its tests, Vite and Vitest config)
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
@@ -14,5 +14,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["./**/*.ts", "../src/shared/**/*.ts", "../vite.config.ts"]
+  "include": ["./**/*.ts", "../src/shared/**/*.ts", "../vite.config.ts", "../vitest.config.ts"]
 }
