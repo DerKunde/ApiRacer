@@ -3,6 +3,7 @@ import type { TrackLayout } from '../../shared/trackLayout';
 import { onPixelRatioChange, sizeRenderer } from '../common/pixelRatio';
 import { MAX_WHEEL_ANGLE, WHEEL_POSITIONS, type CarPhysics } from './carPhysics';
 import { CAR_DESIGNS, createCarModel } from './carModel';
+import { RaceAudio, viewportPan, type EngineSound } from './raceAudio';
 import { RacePhysics } from './racePhysics';
 import { MAX_RACERS, type DriverInput, type RaceView } from './raceView';
 import { splitScreenLayout, type Viewport } from './splitScreenLayout';
@@ -33,6 +34,7 @@ interface Car {
     root: THREE.Group;
     // Owns the pose: root is copied from it every frame
     body: CarPhysics;
+    engine: EngineSound;
     // Pivot groups of all wheels, in the order of WHEEL_POSITIONS – moving them along y follows the suspension
     wheels: THREE.Group[];
     // The front ones among them – rotating them around y turns the wheels
@@ -64,6 +66,7 @@ export class ThreeRaceView implements RaceView {
     private readonly cars = new Map<PeerId, Car>();
 
     private readonly physics = new RacePhysics();
+    private readonly audio = new RaceAudio();
     // Time of the previous frame in ms, unset until the first frame
     private lastFrameTime?: number;
 
@@ -137,6 +140,7 @@ export class ThreeRaceView implements RaceView {
         if (car == null) return;
         this.disposeCar(car);
         this.physics.removeCar(car.body);
+        this.audio.removeEngine(car.engine);
         // The others move up to the next viewport, but stay where they are on the track
         this.cars.delete(id);
     }
@@ -178,12 +182,14 @@ export class ThreeRaceView implements RaceView {
     // overlay: whatever the editor wants to show on the map, shown until stopEditing
     startEditing(overlay: THREE.Object3D): void {
         this.editing = true;
+        this.audio.setSilent(true);
         this.editOverlay = overlay;
         this.scene.add(overlay);
     }
 
     stopEditing(): void {
         this.editing = false;
+        this.audio.setSilent(false);
         this.editOverlay?.removeFromParent();
         this.editOverlay = undefined;
         this.resetCars();
@@ -224,6 +230,8 @@ export class ThreeRaceView implements RaceView {
         const dt = (time - (this.lastFrameTime ?? time)) / 1000;
         if (!this.editing) this.physics.update(dt);
         this.lastFrameTime = time;
+        // Also before the size check: a hidden view keeps the race going, and so its sound
+        this.updateEngines();
 
         this.renderer.getSize(this.size);
         // Hidden container (0 × 0) would make the aspect NaN (0 / 0)
@@ -254,6 +262,14 @@ export class ThreeRaceView implements RaceView {
         if (layout.overview) this.renderView(layout.overview, this.overviewCamera);
 
         this.overlay.hidden = this.cars.size > 0;
+    }
+
+    // Each engine sits in the stereo field where its car's view is on the screen
+    private updateEngines(): void {
+        const { players } = splitScreenLayout(this.cars.size);
+        [...this.cars.values()].forEach(({ body, engine }, i) => {
+            engine.update(body.forwardSpeed, body.input.throttle, viewportPan(players[i]));
+        });
     }
 
     private updateChaseCamera(car: Car, dt: number): void {
@@ -321,7 +337,10 @@ export class ThreeRaceView implements RaceView {
         const cameraRig = new THREE.Group();
         cameraRig.add(camera);
 
-        return { root, body: this.physics.addCar(), wheels, frontWheels, slot, camera, cameraRig, cameraPitch: 0, cameraRoll: 0 };
+        return {
+            root, body: this.physics.addCar(), engine: this.audio.addEngine(slot), wheels, frontWheels, slot, camera, cameraRig,
+            cameraPitch: 0, cameraRoll: 0,
+        };
     }
 
     // Lowest slot nobody holds: after a player left, the size of the map could point to a slot still in use
