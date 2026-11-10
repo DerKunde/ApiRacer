@@ -34,7 +34,15 @@ const MESSAGE_RATE = 20;
 // several network adapters and TURN 8–15 of them. Several phones can need that at the same moment (joining, ICE
 // restart after a Wi-Fi dropout), and closing the host's socket would end the room for every phone.
 const MESSAGE_BURST_PER_PHONE = 40;
-// Close code for a client that breaks the rules (RFC 6455)
+// Open sockets in total. Every limit above is per socket and starts fresh on a new one, and a script can open as many
+// as it likes: this caps what all of them together hold. It also caps the rooms (each one needs its host socket), so
+// createRoomId always finds a free code right away (at most 500 of 32^4 codes taken).
+const MAX_CONNECTIONS = 500;
+// Time a socket has to create or join a room. The pages send that right after connecting. Without it a socket that
+// never joins, or stays after a wrong code (the join form opens a new one for the next code), would stay open forever.
+const JOIN_TIMEOUT_MS = 10_000;
+// Close codes (RFC 6455): done, nothing wrong / a client that breaks the rules
+const NORMAL_CLOSURE = 1000;
 const POLICY_VIOLATION = 1008;
 
 // Only the own pages may connect in production. Keeps other websites out – scripts can still fake the origin.
@@ -186,6 +194,8 @@ function handleClose(ws: WebSocket): void {
     for (const controller of room.controllers.values()) {
       send(controller, { type: 'room-closed' });
       memberships.delete(controller);
+      // Without a room the socket is of no use anymore: the join screen opens a new one for the next code
+      controller.close(NORMAL_CLOSURE, 'Raum geschlossen');
     }
     rooms.delete(room.id);
     console.log(`Raum ${room.id} geschlossen`);
@@ -196,8 +206,9 @@ function handleClose(ws: WebSocket): void {
   }
 }
 
+// Arrays are objects too, but never a message or a part of one
 function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 // The host's bucket grows with its phones, see MESSAGE_BURST_PER_PHONE
@@ -233,7 +244,11 @@ function isSignalData(value: unknown): value is SignalData {
         (value.description.sdp === undefined || typeof value.description.sdp === 'string')
       );
     case 'candidate':
-      return isObject(value.candidate);
+      // The receiving page reads candidate.candidate as a string (candidateType in rtc.ts), it may be missing
+      return (
+        isObject(value.candidate) &&
+        (value.candidate.candidate === undefined || typeof value.candidate.candidate === 'string')
+      );
     default:
       return false;
   }
@@ -257,7 +272,12 @@ const wss = new WebSocketServer({
   host: HOST,
   port: PORT,
   maxPayload: 64 * 1024,
-  verifyClient: ({ origin }: { origin: string }) => !IS_PRODUCTION || origin === ALLOWED_ORIGIN,
+  verifyClient: ({ origin }: { origin: string }, accept: (result: boolean, code?: number, message?: string) => void) => {
+    if (IS_PRODUCTION && origin !== ALLOWED_ORIGIN) return accept(false, 401);
+    // 503: the page shows "Signaling-Server nicht erreichbar" instead of waiting for an answer that never comes
+    if (wss.clients.size >= MAX_CONNECTIONS) return accept(false, 503, 'Server voll');
+    accept(true);
+  },
 });
 
 let listening = false;
@@ -281,6 +301,9 @@ wss.on('error', (error) => {
 
 wss.on('connection', (ws) => {
   const limits: Limits = { failedJoins: 0, tokens: MESSAGE_BURST, refilledAt: performance.now() };
+  const joinTimer = setTimeout(() => {
+    if (!memberships.has(ws)) ws.close(NORMAL_CLOSURE, 'Keinem Raum beigetreten');
+  }, JOIN_TIMEOUT_MS);
 
   ws.on('message', (raw) => {
     // Closed for breaking a limit: whatever the client still sends until the socket is gone is dropped
@@ -311,5 +334,8 @@ wss.on('connection', (ws) => {
     }
   });
   ws.on('error', (error) => console.error('WebSocket-Fehler:', error.message));
-  ws.on('close', () => handleClose(ws));
+  ws.on('close', () => {
+    clearTimeout(joinTimer);
+    handleClose(ws);
+  });
 });

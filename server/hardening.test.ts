@@ -48,6 +48,8 @@ describe('message checks', () => {
     ['signal with an unknown description type', { type: 'signal', to: 'host', data: { kind: 'description', description: { type: 'x' } } }],
     ['signal with a number as SDP', { type: 'signal', to: 'host', data: { kind: 'description', description: { type: 'offer', sdp: 1 } } }],
     ['signal with a candidate that is no object', { type: 'signal', to: 'host', data: { kind: 'candidate', candidate: 'x' } }],
+    ['signal with an array as candidate', { type: 'signal', to: 'host', data: { kind: 'candidate', candidate: [] } }],
+    ['signal with a number as candidate line', { type: 'signal', to: 'host', data: { kind: 'candidate', candidate: { candidate: 5 } } }],
   ])('rejects %s and keeps the socket', async (_, msg) => {
     const client = await server.connect();
     client.send(msg);
@@ -212,6 +214,55 @@ describe('limits', () => {
     for (let i = 0; i < 500; i++) host.send({ type: 'signal', to: peerId, data: CANDIDATE });
     expect(await host.closed).toBe(1008);
     expect((await phone.collect(300)).at(-1)).toEqual({ type: 'room-closed' });
+  });
+});
+
+describe('sockets without a room', () => {
+  it('closes sockets that are in no room after 10 s (1000), and keeps the host', { timeout: 15000 }, async () => {
+    const { host } = await createRoom();
+    const idle = await server.connect();
+    const guesser = await server.connect();
+    guesser.send({ type: 'join-room', roomId: 'ZZZZ' });
+    await guesser.next();
+
+    expect(await idle.closed).toBe(1000);
+    expect(await guesser.closed).toBe(1000);
+    expect(await host.staysOpen()).toBe(true);
+  });
+
+  it("closes the phones' sockets when the host leaves (1000)", async () => {
+    const { host, roomId } = await createRoom();
+    const phone = await server.connect();
+    phone.send({ type: 'join-room', roomId });
+    await phone.next();
+
+    host.close();
+    expect(await phone.next()).toEqual({ type: 'room-closed' });
+    expect(await phone.closed).toBe(1000);
+  });
+});
+
+describe('connection limit', () => {
+  // Its own server: the other tests' sockets would count too, and a closed one only stops counting a moment later
+  let crowded: TestServer;
+
+  beforeAll(async () => {
+    crowded = await startServer();
+  });
+  afterEach(() => crowded?.closeClients());
+  afterAll(() => crowded?.stop());
+
+  it('refuses socket 501 (503) and takes a new one once a socket closed', async () => {
+    // One after the other: the server only counts a socket once its handshake is done
+    const clients: TestClient[] = [];
+    for (let i = 0; i < 500; i++) clients.push(await crowded.connect());
+    await expect(crowded.connect()).rejects.toThrow(/503/);
+
+    clients[0].close();
+    await clients[0].closed;
+    // The server's close event comes a moment after the client's
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(await (await crowded.connect()).staysOpen()).toBe(true);
   });
 });
 
