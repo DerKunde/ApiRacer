@@ -19,6 +19,20 @@ const ROOM_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I, O, 0, 1 (e
 // error messages echo back ("Raum … nicht gefunden").
 const MAX_ID_LENGTH = 16;
 
+// Limits against scripts. Real clients stay far below them: the join form opens a new socket for every code, and
+// after the connection setup a socket is silent.
+// Wrong room codes per socket, then it is closed: guessing codes over one connection is no longer possible
+const MAX_FAILED_JOINS = 5;
+// Phones per room, racers and spectators together: a script could otherwise send thousands, and the host browser
+// would set up a PeerConnection for each of them
+const MAX_CONTROLLERS_PER_ROOM = 16;
+// Messages per socket as a token bucket: up to MESSAGE_BURST at once, then MESSAGE_RATE per second. The burst is
+// for the host: when several phones join at once, it sends an answer and its ICE candidates to each of them.
+const MESSAGE_BURST = 100;
+const MESSAGE_RATE = 20;
+// Close code for a client that breaks the rules (RFC 6455)
+const POLICY_VIOLATION = 1008;
+
 // Only the own pages may connect in production. Keeps other websites out – scripts can still fake the origin.
 const ALLOWED_ORIGIN = 'https://stud.messy-desk-studio.de';
 const TURN_URLS = process.env.TURN_URLS?.split(',');
@@ -36,6 +50,14 @@ interface Room {
 interface Membership {
   room: Room;
   peerId: PeerId;
+}
+
+/** Per socket, lives as long as the socket */
+interface Limits {
+  failedJoins: number;
+  // Token bucket: every message takes one, they refill with MESSAGE_RATE per second
+  tokens: number;
+  refilledAt: number;
 }
 
 const rooms = new Map<string, Room>();
@@ -90,7 +112,7 @@ function lanAddresses(): string[] {
     .map((iface) => iface.address);
 }
 
-function handleMessage(ws: WebSocket, msg: ClientMessage): void {
+function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void {
   const membership = memberships.get(ws);
 
   switch (msg.type) {
@@ -108,7 +130,15 @@ function handleMessage(ws: WebSocket, msg: ClientMessage): void {
     case 'join-room': {
       if (membership) return send(ws, { type: 'error', message: 'Bereits in einem Raum' });
       const room = rooms.get(String(msg.roomId).trim().toUpperCase());
-      if (!room) return send(ws, { type: 'error', message: `Raum ${msg.roomId} nicht gefunden` });
+      if (!room) {
+        send(ws, { type: 'error', message: `Raum ${msg.roomId} nicht gefunden` });
+        if (++limits.failedJoins >= MAX_FAILED_JOINS) {
+          ws.close(POLICY_VIOLATION, 'Zu viele falsche Raumcodes');
+          console.log(`Verbindung nach ${MAX_FAILED_JOINS} falschen Raumcodes geschlossen`);
+        }
+        return;
+      }
+      if (room.controllers.size >= MAX_CONTROLLERS_PER_ROOM) return send(ws, { type: 'error', message: 'Raum voll' });
       const peerId = `p${room.nextPeerNumber++}`;
       const turn = createTurnIceServer(peerId);
       room.controllers.set(peerId, ws);
@@ -162,6 +192,16 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+// Refills the bucket for the time since the last message, then takes one token. false = bucket empty.
+function takeToken(limits: Limits): boolean {
+  const now = Date.now();
+  limits.tokens = Math.min(MESSAGE_BURST, limits.tokens + (now - limits.refilledAt) / 1000 * MESSAGE_RATE);
+  limits.refilledAt = now;
+  if (limits.tokens < 1) return false;
+  limits.tokens--;
+  return true;
+}
+
 function isId(value: unknown): value is string {
   return typeof value === 'string' && value.length <= MAX_ID_LENGTH;
 }
@@ -205,7 +245,17 @@ const wss = new WebSocketServer({
 });
 
 wss.on('connection', (ws) => {
+  const limits: Limits = { failedJoins: 0, tokens: MESSAGE_BURST, refilledAt: Date.now() };
+
   ws.on('message', (raw) => {
+    // Closed for breaking a limit: whatever the client still sends until the socket is gone is dropped
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (!takeToken(limits)) {
+      ws.close(POLICY_VIOLATION, 'Zu viele Nachrichten');
+      console.log('Verbindung wegen zu vieler Nachrichten geschlossen');
+      return;
+    }
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw.toString());
@@ -219,7 +269,7 @@ wss.on('connection', (ws) => {
     }
     // Safety net for bugs in handleMessage: one bad message must not take down every room
     try {
-      handleMessage(ws, parsed);
+      handleMessage(ws, parsed, limits);
     } catch (error) {
       console.error('Fehler beim Verarbeiten der Nachricht:', error);
       send(ws, { type: 'error', message: 'Fehler beim Verarbeiten der Nachricht' });

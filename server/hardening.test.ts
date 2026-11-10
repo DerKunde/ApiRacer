@@ -106,6 +106,77 @@ describe('transport', () => {
   });
 });
 
+describe('limits', () => {
+  const CANDIDATE: SignalData = { kind: 'candidate', candidate: { candidate: '' } };
+
+  async function joinRoom(host: TestClient, roomId: string): Promise<{ phone: TestClient; peerId: string }> {
+    const phone = await server.connect();
+    phone.send({ type: 'join-room', roomId });
+    const msg = await phone.next();
+    if (msg.type !== 'joined') throw new Error(`Expected joined, got ${JSON.stringify(msg)}`);
+    await host.next();
+    return { phone, peerId: msg.peerId };
+  }
+
+  it('closes a socket after 5 wrong room codes (1008)', async () => {
+    const guesser = await server.connect();
+    for (let i = 0; i < 4; i++) {
+      guesser.send({ type: 'join-room', roomId: 'ZZZZ' });
+      expect(await guesser.next()).toEqual({ type: 'error', message: 'Raum ZZZZ nicht gefunden' });
+    }
+    expect(guesser.isOpen).toBe(true);
+
+    guesser.send({ type: 'join-room', roomId: 'ZZZZ' });
+    expect(await guesser.closed).toBe(1008);
+  });
+
+  it('takes 16 phones per room, refuses the 17th, and has room again once one leaves', async () => {
+    const { host, roomId } = await createRoom();
+    const phones: TestClient[] = [];
+    for (let i = 0; i < 16; i++) phones.push((await joinRoom(host, roomId)).phone);
+
+    const extra = await server.connect();
+    extra.send({ type: 'join-room', roomId });
+    expect(await extra.next()).toEqual({ type: 'error', message: 'Raum voll' });
+
+    phones[0].close();
+    expect(await host.next()).toMatchObject({ type: 'peer-left' });
+    const replacement = await server.connect();
+    replacement.send({ type: 'join-room', roomId });
+    expect(await replacement.next()).toMatchObject({ type: 'joined' });
+  });
+
+  it('relays a burst of 90 messages, and more after the bucket refilled', { timeout: 10000 }, async () => {
+    const { host, roomId } = await createRoom();
+    const { phone } = await joinRoom(host, roomId);
+
+    for (let i = 0; i < 90; i++) phone.send({ type: 'signal', to: 'host', data: CANDIDATE });
+    expect(await host.collect(500)).toHaveLength(90);
+
+    // 2 s refill 40 tokens: 10 left + 40 = 50
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    for (let i = 0; i < 40; i++) phone.send({ type: 'signal', to: 'host', data: CANDIDATE });
+    expect(await host.collect(300)).toHaveLength(40);
+    expect(phone.isOpen).toBe(true);
+  });
+
+  it('closes a socket that floods the server (1008), tells the host and keeps serving the others', async () => {
+    const { host, roomId } = await createRoom();
+    const flooder = await joinRoom(host, roomId);
+    const other = await joinRoom(host, roomId);
+
+    for (let i = 0; i < 500; i++) flooder.phone.send({ type: 'signal', to: 'host', data: CANDIDATE });
+    expect(await flooder.phone.closed).toBe(1008);
+    const atHost = await host.collect(300);
+    // The burst got through (plus the little that refilled while the server worked through it), then the leave
+    expect(atHost.filter((msg) => msg.type === 'signal').length).toBeLessThan(150);
+    expect(atHost.at(-1)).toEqual({ type: 'peer-left', peerId: flooder.peerId });
+
+    other.phone.send({ type: 'signal', to: 'host', data: CANDIDATE });
+    expect(await host.next()).toEqual({ type: 'signal', from: other.peerId, data: CANDIDATE });
+  });
+});
+
 describe('origin check in production', () => {
   let production: TestServer;
 
