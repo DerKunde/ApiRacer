@@ -117,9 +117,23 @@ describe('relaying the connection setup', () => {
   });
 });
 
-it('answers a message that is no JSON with an error and keeps the socket', async () => {
-  const client = await server.connect();
-  client.send('not json');
-  expect(await client.next()).toEqual({ type: 'error', message: 'Ungültige Nachricht' });
-  expect(client.isOpen).toBe(true);
+describe('broken messages', () => {
+  it('answers a message that is no JSON with an error and keeps the socket', async () => {
+    const client = await server.connect();
+    client.send('not json');
+    expect(await client.next()).toEqual({ type: 'error', message: 'Ungültige Nachricht' });
+    expect(client.isOpen).toBe(true);
+  });
+
+  // Valid JSON, but not the shape of a message: one of them must not take down the server and with it every room
+  it('answers JSON that is no valid message with an error and keeps running', async () => {
+    const { host, roomId } = await createRoom();
+    const { phone } = await joinRoom(host, roomId);
+    for (const msg of ['null', { type: 'signal', to: 'host' }, { type: 'signal', to: 'host', data: { kind: 'description' } }]) {
+      phone.send(msg);
+      expect(await phone.next()).toMatchObject({ type: 'error' });
+    }
+    // Still serves new sockets
+    await createRoom();
+  });
 });

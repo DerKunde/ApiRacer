@@ -11,7 +11,8 @@ import type { ServerMessage } from '../src/shared/protocol';
  */
 
 const PROJECT_ROOT = fileURLToPath(new URL('..', import.meta.url));
-// Compiling server.ts on the fly takes a moment, longer on a cold CI runner
+// Compiling server.ts on the fly takes a moment, longer on a cold CI runner.
+// Has to stay below hookTimeout in vitest.config.ts.
 const START_TIMEOUT_MS = 10000;
 // How long next() waits for a message before the test fails
 const MESSAGE_TIMEOUT_MS = 2000;
