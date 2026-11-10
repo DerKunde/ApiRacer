@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { connect as connectTcp, createServer, type AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import type { ServerMessage } from '../src/shared/protocol';
@@ -16,6 +15,15 @@ const PROJECT_ROOT = fileURLToPath(new URL('..', import.meta.url));
 const START_TIMEOUT_MS = 10000;
 // How long next() waits for a message before the test fails
 const MESSAGE_TIMEOUT_MS = 2000;
+// How long staysOpen() gives the server to close the socket after its answer
+const STAYS_OPEN_MS = 200;
+// Server output kept for error messages. The end is what explains a failure, the rest only costs memory.
+const MAX_OUTPUT_CHARS = 20000;
+// Printed by server.ts once it listens, with the port the OS picked for PORT=0
+const LISTENING = /Signaling-Server läuft auf ws:\/\/[\d.]+:(\d+)/;
+// From the developer's shell, they would change how the server behaves on one machine but not on another.
+// Tests that need one pass it to startServer.
+const SERVER_ENV_KEYS = ['NODE_ENV', 'TURN_URLS', 'TURN_SECRET'];
 
 export interface TestServer {
   url: string;
@@ -28,28 +36,58 @@ export interface TestServer {
 
 // env: extra environment variables for the server, e.g. NODE_ENV=production
 export async function startServer(env: Record<string, string> = {}): Promise<TestServer> {
-  const port = await freePort();
+  const baseEnv = { ...process.env };
+  for (const key of SERVER_ENV_KEYS) delete baseEnv[key];
+  // PORT=0: the OS picks a free port and the server prints which one – nothing to pick beforehand that another
+  // process could take in the meantime
   const child = spawn(process.execPath, ['--import', 'tsx', 'server/server.ts'], {
     cwd: PROJECT_ROOT,
-    env: { ...process.env, ...env, PORT: String(port) },
+    env: { ...baseEnv, ...env, PORT: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  // Kept for the error message if it doesn't start. Read the whole time: a full pipe would block the server's logging.
+  // Decoded as a stream: a character split between two chunks stays whole (the server logs umlauts and arrows)
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  // Read the whole time: a full pipe would block the server's logging
   let output = '';
-  child.stdout.on('data', (chunk: Buffer) => output += chunk.toString());
-  child.stderr.on('data', (chunk: Buffer) => output += chunk.toString());
+  const append = (text: string): void => {
+    output = (output + text).slice(-MAX_OUTPUT_CHARS);
+  };
+  child.stdout.on('data', append);
+  child.stderr.on('data', append);
 
-  // Ready once the port takes connections. Not the start message: the server prints it before it listens.
-  const exited = (): boolean => child.exitCode !== null || child.signalCode !== null;
-  const deadline = Date.now() + START_TIMEOUT_MS;
-  while (!(await acceptsConnections(port))) {
-    if (exited() || Date.now() > deadline) {
-      const reason = exited() ? `exited (${child.exitCode ?? child.signalCode})` : `not listening within ${START_TIMEOUT_MS} ms`;
+  const port = await new Promise<number>((resolve, reject) => {
+    const fail = (reason: string): void => {
+      cleanUp();
       child.kill();
-      throw new Error(`Signaling server ${reason}:\n${output}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+      reject(new Error(`Signaling server ${reason}:\n${output}`));
+    };
+    const onData = (): void => {
+      const match = LISTENING.exec(output);
+      if (!match) return;
+      cleanUp();
+      resolve(Number(match[1]));
+    };
+    const onError = (error: Error): void => fail(`could not be started (${error.message})`);
+    const onExit = (code: number | null, signal: string | null): void => fail(`exited (${code ?? signal})`);
+    const timer = setTimeout(() => fail(`not listening within ${START_TIMEOUT_MS} ms`), START_TIMEOUT_MS);
+    const cleanUp = (): void => {
+      clearTimeout(timer);
+      child.stdout.off('data', onData);
+      child.off('error', onError);
+      child.off('exit', onExit);
+    };
+    child.stdout.on('data', onData);
+    child.once('error', onError);
+    child.once('exit', onExit);
+  });
+
+  let stopping = false;
+  // From here on, a crash shows up in the tests as refused connections or missing messages – this says why
+  child.on('exit', (code, signal) => {
+    if (!stopping) console.error(`Signaling server exited during the tests (${code ?? signal}):\n${output}`);
+  });
+  child.on('error', (error) => console.error(`Signaling server process error: ${error.message}`));
 
   const url = `ws://127.0.0.1:${port}`;
   const clients = new Set<TestClient>();
@@ -65,9 +103,10 @@ export async function startServer(env: Record<string, string> = {}): Promise<Tes
       clients.clear();
     },
     async stop() {
-      const running = !exited();
+      stopping = true;
+      if (child.exitCode !== null || child.signalCode !== null) return;
       child.kill();
-      if (running) await once(child, 'exit');
+      await once(child, 'exit');
     },
   };
 }
@@ -78,16 +117,22 @@ export class TestClient {
   private readonly ws: WebSocket;
   // Arrived, but not taken by next() yet
   private readonly inbox: ServerMessage[] = [];
-  private waiting?: (msg: ServerMessage) => void;
+  // next() calls still waiting, oldest first: each message goes to the oldest
+  private readonly waiting: ((msg: ServerMessage) => void)[] = [];
+  // A socket error after the connection was open. Kept for next(), so the test that waits fails with it.
+  private error?: Error;
 
   private constructor(ws: WebSocket) {
     this.ws = ws;
     ws.on('message', (data: Buffer) => {
       const msg = JSON.parse(data.toString()) as ServerMessage;
-      const waiting = this.waiting;
-      this.waiting = undefined;
+      const waiting = this.waiting.shift();
       if (waiting) waiting(msg);
       else this.inbox.push(msg);
+    });
+    // Without a listener, an error event would be an uncaught exception, blamed on no test in particular
+    ws.on('error', (error) => {
+      this.error = error;
     });
     this.closed = new Promise((resolve) => ws.once('close', (code: number) => resolve(code)));
   }
@@ -99,7 +144,10 @@ export class TestClient {
     return new TestClient(ws);
   }
 
-  get isOpen(): boolean {
+  // Asked right when an answer arrives, a socket the server closes after that answer would still count as open:
+  // its close frame isn't processed yet. So it waits a moment first.
+  async staysOpen(): Promise<boolean> {
+    await new Promise((resolve) => setTimeout(resolve, STAYS_OPEN_MS));
     return this.ws.readyState === WebSocket.OPEN;
   }
 
@@ -112,15 +160,18 @@ export class TestClient {
   next(): Promise<ServerMessage> {
     const queued = this.inbox.shift();
     if (queued) return Promise.resolve(queued);
+    if (this.error) return Promise.reject(this.error);
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.waiting = undefined;
-        reject(new Error(`No message within ${MESSAGE_TIMEOUT_MS} ms`));
-      }, MESSAGE_TIMEOUT_MS);
-      this.waiting = (msg) => {
+      const deliver = (msg: ServerMessage): void => {
         clearTimeout(timer);
         resolve(msg);
       };
+      const timer = setTimeout(() => {
+        // Only its own place: a next() called later keeps waiting
+        this.waiting.splice(this.waiting.indexOf(deliver), 1);
+        reject(this.error ?? new Error(`No message within ${MESSAGE_TIMEOUT_MS} ms`));
+      }, MESSAGE_TIMEOUT_MS);
+      this.waiting.push(deliver);
     });
   }
 
@@ -133,27 +184,4 @@ export class TestClient {
   close(): void {
     this.ws.close();
   }
-}
-
-function acceptsConnections(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = connectTcp(port, '127.0.0.1');
-    socket.once('connect', () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once('error', () => resolve(false));
-  });
-}
-
-// Port 0 lets the OS pick a free one. Tiny race until the server takes it – fine for tests.
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const probe = createServer();
-    probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address() as AddressInfo;
-      probe.close(() => resolve(port));
-    });
-  });
 }

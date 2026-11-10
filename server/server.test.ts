@@ -12,8 +12,9 @@ let server: TestServer;
 beforeAll(async () => {
   server = await startServer();
 });
-afterEach(() => server.closeClients());
-afterAll(() => server.stop());
+// server is unset if beforeAll failed: without ?. a TypeError would cover up the real error
+afterEach(() => server?.closeClients());
+afterAll(() => server?.stop());
 
 async function createRoom(): Promise<{ host: TestClient; roomId: string }> {
   const host = await server.connect();
@@ -122,7 +123,7 @@ describe('broken messages', () => {
     const client = await server.connect();
     client.send('not json');
     expect(await client.next()).toEqual({ type: 'error', message: 'Ungültige Nachricht' });
-    expect(client.isOpen).toBe(true);
+    expect(await client.staysOpen()).toBe(true);
   });
 
   // Valid JSON, but not the shape of a message: one of them must not take down the server and with it every room

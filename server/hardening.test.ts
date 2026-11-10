@@ -14,8 +14,9 @@ let server: TestServer;
 beforeAll(async () => {
   server = await startServer();
 });
-afterEach(() => server.closeClients());
-afterAll(() => server.stop());
+// server is unset if beforeAll failed: without ?. a TypeError would cover up the real error
+afterEach(() => server?.closeClients());
+afterAll(() => server?.stop());
 
 async function createRoom(): Promise<{ host: TestClient; roomId: string }> {
   const host = await server.connect();
@@ -50,7 +51,7 @@ describe('message checks', () => {
     const client = await server.connect();
     client.send(msg);
     expect(await client.next()).toEqual(INVALID);
-    expect(client.isOpen).toBe(true);
+    expect(await client.staysOpen()).toBe(true);
   });
 
   it('still takes a code of exactly 16 characters as a code', async () => {
@@ -124,7 +125,7 @@ describe('limits', () => {
       guesser.send({ type: 'join-room', roomId: 'ZZZZ' });
       expect(await guesser.next()).toEqual({ type: 'error', message: 'Raum ZZZZ nicht gefunden' });
     }
-    expect(guesser.isOpen).toBe(true);
+    expect(await guesser.staysOpen()).toBe(true);
 
     guesser.send({ type: 'join-room', roomId: 'ZZZZ' });
     expect(await guesser.closed).toBe(1008);
@@ -157,7 +158,7 @@ describe('limits', () => {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     for (let i = 0; i < 40; i++) phone.send({ type: 'signal', to: 'host', data: CANDIDATE });
     expect(await host.collect(300)).toHaveLength(40);
-    expect(phone.isOpen).toBe(true);
+    expect(await phone.staysOpen()).toBe(true);
   });
 
   it('closes a socket that floods the server (1008), tells the host and keeps serving the others', async () => {
@@ -183,12 +184,12 @@ describe('origin check in production', () => {
   beforeAll(async () => {
     production = await startServer({ NODE_ENV: 'production' });
   });
-  afterEach(() => production.closeClients());
-  afterAll(() => production.stop());
+  afterEach(() => production?.closeClients());
+  afterAll(() => production?.stop());
 
   it('accepts the own pages', async () => {
     const client = await production.connect('https://stud.messy-desk-studio.de');
-    expect(client.isOpen).toBe(true);
+    expect(await client.staysOpen()).toBe(true);
   });
 
   it.each([

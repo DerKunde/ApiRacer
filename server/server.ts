@@ -1,3 +1,4 @@
+import type { AddressInfo } from 'node:net';
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 import { WebSocket, WebSocketServer } from 'ws';
 import { HOST_ID, type ClientMessage, type IceServer, type PeerId, type ServerMessage, type SignalData } from '../src/shared/protocol';
@@ -244,6 +245,17 @@ const wss = new WebSocketServer({
   verifyClient: ({ origin }: { origin: string }) => !IS_PRODUCTION || origin === ALLOWED_ORIGIN,
 });
 
+// Only once the port is really open. With PORT=0 the OS picks a free one (the tests do that), printed here.
+wss.on('listening', () => {
+  const { port } = wss.address() as AddressInfo;
+  console.log(`Signaling-Server läuft auf ws://${HOST}:${port}`);
+});
+// E.g. the port is taken. Without a listener, the error event would end the process with a bare stack trace.
+wss.on('error', (error) => {
+  console.error(`Signaling-Server konnte nicht starten: ${error.message}`);
+  process.exit(1);
+});
+
 wss.on('connection', (ws) => {
   const limits: Limits = { failedJoins: 0, tokens: MESSAGE_BURST, refilledAt: Date.now() };
 
@@ -278,5 +290,3 @@ wss.on('connection', (ws) => {
   ws.on('error', (error) => console.error('WebSocket-Fehler:', error.message));
   ws.on('close', () => handleClose(ws));
 });
-
-console.log(`Signaling-Server läuft auf ws://${HOST}:${PORT}`);
