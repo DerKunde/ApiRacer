@@ -1,14 +1,22 @@
 name: CI
 
 on:
-  # Every branch, not tags (those deploy). PRs from this repo show the checks of their head commit.
+  # Every branch, not tags (those deploy): also branches without a PR get checked
   push:
     branches: ['**']
+  # The branch merged with the current main – the push run only checks the branch as it is. The only run a PR from
+  # a fork gets. A PR from this repo runs twice, once for each trigger.
+  pull_request:
   # Called by the deploy workflow: nothing gets deployed that fails here
   workflow_call:
+    inputs:
+      upload-dist:
+        description: Upload the built pages as artifact "dist", so the deploy ships exactly what was checked here
+        type: boolean
+        default: false
 
-# A newer push to the same branch makes the older run pointless. With the workflow name in the group, a run called
-# by a deploy never cancels a push run or the other way around.
+# A newer push to the same branch or PR makes the older run pointless. With the workflow name in the group, a run
+# called by a deploy never cancels a push run or the other way around.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -40,3 +48,13 @@ jobs:
 
       - name: Test
         run: npm test
+
+      # Only when called by the deploy workflow (inputs is empty for push and pull_request)
+      - name: Upload pages for the deploy
+        if: inputs.upload-dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
