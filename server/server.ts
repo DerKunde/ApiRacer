@@ -1,7 +1,17 @@
+import type { AddressInfo } from 'node:net';
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 import { WebSocket, WebSocketServer } from 'ws';
-import { HOST_ID, type ClientMessage, type IceServer, type PeerId, type ServerMessage } from '../src/shared/protocol';
+import { HOST_ID, type ClientMessage, type IceServer, type PeerId, type ServerMessage, type SignalData } from '../src/shared/protocol';
 import { createHmac } from 'node:crypto';
+
+// ws 8.22 (package.json asks for at least that) has this option, @types/ws 8.18 doesn't know it yet
+declare module 'ws' {
+  namespace WebSocket {
+    interface ServerOptions {
+      closeTimeout?: number;
+    }
+  }
+}
 
 /**
  * Signaling server: only brokers the connection setup (offer/answer/ICE).
@@ -15,7 +25,40 @@ const HOST = '127.0.0.1';
 // Set in the systemd unit on the VPS. LAN addresses are only needed when playing locally.
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const ROOM_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I, O, 0, 1 (easily confused)
+// Room codes have 4 characters, peer IDs are "host" or "p<n>": anything longer is no ID. Also caps what the
+// error messages echo back ("Raum … nicht gefunden").
+const MAX_ID_LENGTH = 16;
 
+// Limits against scripts. Real clients stay far below them: the join form opens a new socket for every code, and
+// after the connection setup a socket is silent.
+// Wrong room codes per socket, then it is closed: guessing codes over one connection is no longer possible
+const MAX_FAILED_JOINS = 5;
+// Phones per room, racers and spectators together: a script could otherwise send thousands, and the host browser
+// would set up a PeerConnection for each of them
+const MAX_CONTROLLERS_PER_ROOM = 16;
+// Messages per socket as a token bucket: up to MESSAGE_BURST at once, then MESSAGE_RATE per second
+const MESSAGE_BURST = 100;
+const MESSAGE_RATE = 20;
+// On top for the host, per phone in its room: it sends each phone an answer and all its ICE candidates, on a PC with
+// several network adapters and TURN 8–15 of them. Several phones can need that at the same moment (joining, ICE
+// restart after a Wi-Fi dropout), and closing the host's socket would end the room for every phone.
+const MESSAGE_BURST_PER_PHONE = 40;
+// Open sockets in total. Every limit above is per socket and starts fresh on a new one, and a script can open as many
+// as it likes: this caps what all of them together hold. It also caps the rooms (each one needs its host socket), so
+// createRoomId always finds a free code right away (at most 500 of 32^4 codes taken).
+const MAX_CONNECTIONS = 500;
+// Time a socket has to create or join a room. The pages send that right after connecting. Without it a socket that
+// never joins, or stays after a wrong code (the join form opens a new one for the next code), would stay open forever.
+const JOIN_TIMEOUT_MS = 10_000;
+// Time a closed socket has to answer the close frame, then the server drops it. ws waits 30 s by default: a script
+// that never answers would keep its room and its place under MAX_CONNECTIONS that long. A real browser answers at once.
+const CLOSE_TIMEOUT_MS = 2000;
+// Close codes (RFC 6455): done, nothing wrong / a client that breaks the rules
+const NORMAL_CLOSURE = 1000;
+const POLICY_VIOLATION = 1008;
+
+// Only the own pages may connect in production. Keeps other websites out – scripts can still fake the origin.
+const ALLOWED_ORIGIN = 'https://stud.messy-desk-studio.de';
 const TURN_URLS = process.env.TURN_URLS?.split(',');
 const TURN_SECRET = process.env.TURN_SECRET;
 const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
@@ -23,6 +66,8 @@ const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
 interface Room {
   id: string;
   host: WebSocket;
+  // The host socket's limits: every phone that joins adds to its bucket
+  hostLimits: Limits;
   controllers: Map<PeerId, WebSocket>;
   nextPeerNumber: number;
 }
@@ -31,6 +76,14 @@ interface Room {
 interface Membership {
   room: Room;
   peerId: PeerId;
+}
+
+/** Per socket, lives as long as the socket */
+interface Limits {
+  failedJoins: number;
+  // Token bucket: every message takes one, they refill with MESSAGE_RATE per second
+  tokens: number;
+  refilledAt: number;
 }
 
 const rooms = new Map<string, Room>();
@@ -85,14 +138,24 @@ function lanAddresses(): string[] {
     .map((iface) => iface.address);
 }
 
-function handleMessage(ws: WebSocket, msg: ClientMessage): void {
+// Every join that doesn't get the socket into a room counts as a wrong code. Also "Raum voll": otherwise it would
+// confirm that a code exists without using up the guesses.
+function failJoin(ws: WebSocket, limits: Limits, message: string): void {
+  send(ws, { type: 'error', message });
+  if (++limits.failedJoins >= MAX_FAILED_JOINS) {
+    ws.close(POLICY_VIOLATION, 'Zu viele falsche Raumcodes');
+    console.log(`Verbindung nach ${MAX_FAILED_JOINS} falschen Raumcodes geschlossen`);
+  }
+}
+
+function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void {
   const membership = memberships.get(ws);
 
   switch (msg.type) {
     case 'create-room': {
       if (membership) return send(ws, { type: 'error', message: 'Bereits in einem Raum' });
       const turn = createTurnIceServer(HOST_ID);
-      const room: Room = { id: createRoomId(), host: ws, controllers: new Map(), nextPeerNumber: 1 };
+      const room: Room = { id: createRoomId(), host: ws, hostLimits: limits, controllers: new Map(), nextPeerNumber: 1 };
       rooms.set(room.id, room);
       memberships.set(ws, { room, peerId: HOST_ID });
       send(ws, { type: 'room-created', roomId: room.id, lanAddresses: IS_PRODUCTION ? undefined : lanAddresses(), iceServers: turn ? [turn] : undefined });
@@ -102,12 +165,17 @@ function handleMessage(ws: WebSocket, msg: ClientMessage): void {
 
     case 'join-room': {
       if (membership) return send(ws, { type: 'error', message: 'Bereits in einem Raum' });
-      const room = rooms.get(String(msg.roomId).trim().toUpperCase());
-      if (!room) return send(ws, { type: 'error', message: `Raum ${msg.roomId} nicht gefunden` });
+      const room = rooms.get(msg.roomId.trim().toUpperCase());
+      if (!room) return failJoin(ws, limits, `Raum ${msg.roomId} nicht gefunden`);
+      if (room.controllers.size >= MAX_CONTROLLERS_PER_ROOM) return failJoin(ws, limits, 'Raum voll');
       const peerId = `p${room.nextPeerNumber++}`;
       const turn = createTurnIceServer(peerId);
+      const hostBurstBefore = messageBurst(room.host);
       room.controllers.set(peerId, ws);
       memberships.set(ws, { room, peerId });
+      // What the host's bucket grew by is available right away, not only after the refill: the host answers the new
+      // phone now. messageBurst stays the one place that says how much that is.
+      room.hostLimits.tokens += messageBurst(room.host) - hostBurstBefore;
       send(ws, { type: 'joined', roomId: room.id, peerId, iceServers: turn ? [turn] : undefined });
       send(room.host, { type: 'peer-joined', peerId });
       console.log(`[${room.id}] ${peerId} beigetreten`);
@@ -143,6 +211,8 @@ function handleClose(ws: WebSocket): void {
     for (const controller of room.controllers.values()) {
       send(controller, { type: 'room-closed' });
       memberships.delete(controller);
+      // Without a room the socket is of no use anymore: the join screen opens a new one for the next code
+      controller.close(NORMAL_CLOSURE, 'Raum geschlossen');
     }
     rooms.delete(room.id);
     console.log(`Raum ${room.id} geschlossen`);
@@ -153,27 +223,139 @@ function handleClose(ws: WebSocket): void {
   }
 }
 
-const wss = new WebSocketServer({ host: HOST, port: PORT });
+// Arrays are objects too, but never a message or a part of one
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// The host's bucket grows with its phones, see MESSAGE_BURST_PER_PHONE
+function messageBurst(ws: WebSocket): number {
+  const membership = memberships.get(ws);
+  if (membership?.peerId !== HOST_ID) return MESSAGE_BURST;
+  return MESSAGE_BURST + membership.room.controllers.size * MESSAGE_BURST_PER_PHONE;
+}
+
+// Refills the bucket for the time since the last message, then takes one token. false = bucket empty.
+// performance.now() instead of Date.now(): a clock set back (NTP) would take tokens instead of adding them.
+function takeToken(limits: Limits, burst: number): boolean {
+  const now = performance.now();
+  limits.tokens = Math.min(burst, limits.tokens + (now - limits.refilledAt) / 1000 * MESSAGE_RATE);
+  limits.refilledAt = now;
+  if (limits.tokens < 1) return false;
+  limits.tokens--;
+  return true;
+}
+
+function isId(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_ID_LENGTH;
+}
+
+// Only the shape: the server relays SDP and candidates without reading them, the receiving browser parses them
+function isSignalData(value: unknown): value is SignalData {
+  if (!isObject(value)) return false;
+  switch (value.kind) {
+    case 'description':
+      return (
+        isObject(value.description) &&
+        ['offer', 'answer', 'pranswer', 'rollback'].includes(value.description.type as string) &&
+        (value.description.sdp === undefined || typeof value.description.sdp === 'string')
+      );
+    case 'candidate':
+      // The receiving page reads candidate.candidate as a string (candidateType in rtc.ts), it may be missing
+      return (
+        isObject(value.candidate) &&
+        (value.candidate.candidate === undefined || typeof value.candidate.candidate === 'string')
+      );
+    default:
+      return false;
+  }
+}
+
+function isClientMessage(value: unknown): value is ClientMessage {
+  if (!isObject(value)) return false;
+  switch (value.type) {
+    case 'create-room':
+      return true;
+    case 'join-room':
+      return isId(value.roomId);
+    case 'signal':
+      return isId(value.to) && isSignalData(value.data);
+    default:
+      return false;
+  }
+}
+
+const wss = new WebSocketServer({
+  host: HOST,
+  port: PORT,
+  maxPayload: 64 * 1024,
+  closeTimeout: CLOSE_TIMEOUT_MS,
+  // accept() is called right away, so ws counts the socket in wss.clients in the same step: handshakes running in
+  // parallel can't all slip past the check before one of them is counted
+  verifyClient: ({ origin }: { origin: string }, accept: (result: boolean, code?: number, message?: string) => void) => {
+    if (IS_PRODUCTION && origin !== ALLOWED_ORIGIN) return accept(false, 401);
+    // 503: the page shows "Signaling-Server nicht erreichbar" instead of waiting for an answer that never comes
+    if (wss.clients.size >= MAX_CONNECTIONS) return accept(false, 503, 'Server voll');
+    accept(true);
+  },
+});
+
+let listening = false;
+// Only once the port is really open. With PORT=0 the OS picks a free one (the tests do that), printed here.
+wss.on('listening', () => {
+  listening = true;
+  const { port } = wss.address() as AddressInfo;
+  console.log(`Signaling-Server läuft auf ws://${HOST}:${port}`);
+});
+// Without a listener, the error event would end the process with a bare stack trace
+wss.on('error', (error) => {
+  // After the start, e.g. accepting a connection failed: ending the process would drop every room
+  if (listening) {
+    console.error(`Signaling-Server-Fehler: ${error.message}`);
+    return;
+  }
+  // E.g. the port is taken
+  console.error(`Signaling-Server konnte nicht starten: ${error.message}`);
+  process.exit(1);
+});
 
 wss.on('connection', (ws) => {
+  const limits: Limits = { failedJoins: 0, tokens: MESSAGE_BURST, refilledAt: performance.now() };
+  const joinTimer = setTimeout(() => {
+    if (!memberships.has(ws)) ws.close(NORMAL_CLOSURE, 'Keinem Raum beigetreten');
+  }, JOIN_TIMEOUT_MS);
+
   ws.on('message', (raw) => {
-    let msg: ClientMessage;
+    // Closed for breaking a limit: whatever the client still sends until the socket is gone is dropped
+    if (ws.readyState !== WebSocket.OPEN) return;
+    if (!takeToken(limits, messageBurst(ws))) {
+      ws.close(POLICY_VIOLATION, 'Zu viele Nachrichten');
+      console.log('Verbindung wegen zu vieler Nachrichten geschlossen');
+      return;
+    }
+
+    let parsed: unknown;
     try {
-      msg = JSON.parse(raw.toString()) as ClientMessage;
+      parsed = JSON.parse(raw.toString());
     } catch {
       send(ws, { type: 'error', message: 'Ungültige Nachricht' });
       return;
     }
-    // The shape isn't checked: valid JSON like `null` or a signal without data throws in handleMessage.
-    // Uncaught, that would end the process and take down every room.
+    if (!isClientMessage(parsed)) {
+      send(ws, { type: 'error', message: 'Ungültige Nachricht' });
+      return;
+    }
+    // Safety net for bugs in handleMessage: one bad message must not take down every room
     try {
-      handleMessage(ws, msg);
+      handleMessage(ws, parsed, limits);
     } catch (error) {
       console.error('Fehler beim Verarbeiten der Nachricht:', error);
       send(ws, { type: 'error', message: 'Fehler beim Verarbeiten der Nachricht' });
     }
   });
-  ws.on('close', () => handleClose(ws));
+  ws.on('error', (error) => console.error('WebSocket-Fehler:', error.message));
+  ws.on('close', () => {
+    clearTimeout(joinTimer);
+    handleClose(ws);
+  });
 });
-
-console.log(`Signaling-Server läuft auf ws://${HOST}:${PORT}`);

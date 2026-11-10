@@ -11,9 +11,12 @@ on:
 concurrency: deploy
 
 jobs:
-  # Typecheck, build and tests: the tagged commit has to pass them before anything gets deployed
+  # Typecheck, build and tests: the tagged commit has to pass them before anything gets deployed. The pages it
+  # built come back as artifact "dist" for deploy-pages, so they are built once and shipped as checked.
   check:
     uses: ./.github/workflows/ci.yml
+    with:
+      upload-dist: true
 
   # Signaling server on the VPS. Every deploy restarts it, which drops all open rooms.
   deploy-relay:
@@ -43,30 +46,21 @@ jobs:
             exit 1
           fi
 
-  build-and-deploy:
+  deploy-pages:
     # Only ship a frontend if the server it talks to was deployed successfully
-    needs: deploy-relay
+    needs: [check, deploy-relay]
     runs-on: ubuntu-latest
     environment:
       name: production
       url: https://stud.messy-desk-studio.de
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      # No checkout or build: the pages are the ones check built and tested
+      - name: Download the checked pages
+        uses: actions/download-artifact@v4
         with:
-          node-version: 24
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      # Also runs the typecheck, so type errors stop the deploy
-      - name: Build
-        run: npm run build
+          name: dist
+          path: dist
 
       - name: Deploy via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5

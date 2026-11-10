@@ -117,7 +117,7 @@ Type-checks client and server and writes the static pages to `dist/`. The produc
 npm test
 ```
 
-Runs the tests with [Vitest](https://vitest.dev/). The signaling server tests start the real `server.ts` on a free port and talk to it over WebSocket, like the pages do. GitHub Actions runs typecheck, build and tests on every push ([ci.yml](.github/workflows/ci.yml)), and a deploy only starts once they pass.
+Runs the tests with [Vitest](https://vitest.dev/). The signaling server tests start the real `server.ts` on a free port and talk to it over WebSocket, like the pages do. GitHub Actions runs typecheck, build and tests on every pull request ([ci.yml](.github/workflows/ci.yml)). A deploy runs them first and ships the pages built there, so what goes live is what was checked.
 
 ### Pages
 
@@ -151,6 +151,7 @@ src/
 | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
 | [server.ts](server/server.ts)                                      | Signaling server (WebSocket): rooms, relays offer/answer/ICE, hands out TURN credentials |
 | [server.test.ts](server/server.test.ts)                            | Tests of the signaling server: rooms, joining, relaying, leaving                         |
+| [hardening.test.ts](server/hardening.test.ts)                      | Tests against misbehaving clients: broken and oversized messages, origin, limits         |
 | [testServer.ts](server/testServer.ts)                              | Test helpers: starts `server.ts` in its own process, WebSocket client for the tests      |
 | [protocol.ts](src/shared/protocol.ts)                              | Message types shared by signaling server, host sessions and phone (client)                |
 | [signaling.ts](src/client/common/signaling.ts)                     | WebSocket connection to the signaling server                                             |
@@ -185,8 +186,8 @@ src/
 | File                                                    | Purpose                                                                          |
 | ------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | [sensorCheck.ts](src/client/sensorCheck/sensorCheck.ts) | Sensor check page: which orientation/motion APIs the device and browser support |
-| [ci.yml](.github/workflows/ci.yml)                      | GitHub Actions on every push: typecheck, build, tests                            |
-| [deploy.yml](.github/workflows/deploy.yml)              | GitHub Actions: runs ci.yml, then signaling server via SSH, static pages via FTPS |
+| [ci.yml](.github/workflows/ci.yml)                      | GitHub Actions on every PR: typecheck, build, tests                              |
+| [deploy.yml](.github/workflows/deploy.yml)              | GitHub Actions: runs ci.yml, then signaling server via SSH, its pages via FTPS   |
 | [apiracer-deploy.sh](deploy/apiracer-deploy.sh)         | Deploy script on the server: update, restart, rollback on failure                |
 
 **Where to start reading:**
