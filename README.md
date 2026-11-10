@@ -117,7 +117,7 @@ Type-checks client and server and writes the static pages to `dist/`. The produc
 npm test
 ```
 
-Runs the tests with [Vitest](https://vitest.dev/). The signaling server tests start the real `server.ts` on a free port and talk to it over WebSocket, like the pages do. GitHub Actions runs typecheck, build and tests on every push and pull request ([ci.yml](.github/workflows/ci.yml)). A deploy runs them first and ships the pages built there, so what goes live is what was checked.
+Runs the tests with [Vitest](https://vitest.dev/). The signaling server tests start the real `server.ts` on a free port and talk to it over WebSocket, like the pages do. GitHub Actions runs typecheck, build and tests on every pull request ([ci.yml](.github/workflows/ci.yml)). A deploy runs them first and ships the pages built there, so what goes live is what was checked.
 
 ### Pages
 
@@ -186,7 +186,7 @@ src/
 | File                                                    | Purpose                                                                          |
 | ------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | [sensorCheck.ts](src/client/sensorCheck/sensorCheck.ts) | Sensor check page: which orientation/motion APIs the device and browser support |
-| [ci.yml](.github/workflows/ci.yml)                      | GitHub Actions on every push and PR: typecheck, build, tests                     |
+| [ci.yml](.github/workflows/ci.yml)                      | GitHub Actions on every PR: typecheck, build, tests                              |
 | [deploy.yml](.github/workflows/deploy.yml)              | GitHub Actions: runs ci.yml, then signaling server via SSH, its pages via FTPS   |
 | [apiracer-deploy.sh](deploy/apiracer-deploy.sh)         | Deploy script on the server: update, restart, rollback on failure                |
 
