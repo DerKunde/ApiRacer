@@ -19,7 +19,7 @@ const MESSAGE_TIMEOUT_MS = 2000;
 
 export interface TestServer {
   url: string;
-  // Opens a socket like a browser page. origin: the Origin header, only checked in production.
+  // Opens a socket like a browser page. origin: the Origin header the browser would send, none if left out.
   connect(origin?: string): Promise<TestClient>;
   // For afterEach: every test starts without the sockets of the previous one
   closeClients(): void;

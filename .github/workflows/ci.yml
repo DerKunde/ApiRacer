@@ -13,6 +13,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Checking out is all the token is needed for. Without this, it has the repository's default scope, possibly write
+# access, while npm ci runs the install scripts of every dependency. Also limits the run called by the deploy workflow.
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
