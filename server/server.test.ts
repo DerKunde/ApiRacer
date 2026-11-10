@@ -16,11 +16,16 @@ const REJOIN_GRACE_MS = 500;
 const GOING_AWAY_GRACE_MS = 100;
 // Close code a browser sends when its page is closed or reloaded
 const GOING_AWAY = 1001;
+// Short, so a socket that stopped answering is dropped well within the 2 s of next()
+const HEARTBEAT_INTERVAL_MS = 200;
+// Close code of a connection that dropped without a close frame (here: dropped by the server's heartbeat)
+const ABNORMAL_CLOSURE = 1006;
 
 beforeAll(async () => {
   server = await startServer({
     REJOIN_GRACE_MS: String(REJOIN_GRACE_MS),
     GOING_AWAY_GRACE_MS: String(GOING_AWAY_GRACE_MS),
+    HEARTBEAT_INTERVAL_MS: String(HEARTBEAT_INTERVAL_MS),
   });
 });
 // server is unset if beforeAll failed: without ?. a TypeError would cover up the real error
@@ -115,7 +120,7 @@ describe('rooms', () => {
 
     const back = await server.connect();
     back.send({ type: 'rejoin-room', roomId, sessionToken });
-    expect(await back.next()).toEqual({ type: 'error', message: 'Sitzung abgelaufen – bitte neu beitreten' });
+    expect(await back.next()).toEqual({ type: 'rejoin-failed', message: 'Sitzung abgelaufen – bitte neu beitreten' });
   });
 
   it('lets only a phone in a room leave it', async () => {
@@ -179,14 +184,51 @@ describe('rejoining', () => {
 
     const guesser = await server.connect();
     guesser.send({ type: 'rejoin-room', roomId, sessionToken: 'not-the-token' });
-    expect(await guesser.next()).toEqual({ type: 'error', message: 'Sitzung abgelaufen – bitte neu beitreten' });
+    expect(await guesser.next()).toEqual({ type: 'rejoin-failed', message: 'Sitzung abgelaufen – bitte neu beitreten' });
 
     phone.close();
     expect(await host.next()).toMatchObject({ type: 'peer-away', peerId });
     expect(await host.next()).toEqual({ type: 'peer-left', peerId, reason: 'timeout' });
     const late = await server.connect();
     late.send({ type: 'rejoin-room', roomId, sessionToken });
-    expect(await late.next()).toEqual({ type: 'error', message: 'Sitzung abgelaufen – bitte neu beitreten' });
+    expect(await late.next()).toEqual({ type: 'rejoin-failed', message: 'Sitzung abgelaufen – bitte neu beitreten' });
+  });
+});
+
+describe('heartbeat', () => {
+  it('drops a phone that stopped answering pings, and keeps its slot for a rejoin', async () => {
+    const { host, roomId } = await createRoom();
+    // Joined like any phone, then silent: a connection that died without a close
+    const phone = await server.connect(undefined, false);
+    phone.send({ type: 'join-room', roomId });
+    const joined = await phone.next();
+    if (joined.type !== 'joined') throw new Error(`Expected joined, got ${JSON.stringify(joined)}`);
+    expect(await host.next()).toEqual({ type: 'peer-joined', peerId: joined.peerId });
+
+    expect(await host.next()).toEqual({ type: 'peer-away', peerId: joined.peerId, graceMs: REJOIN_GRACE_MS });
+    expect(await phone.closed).toBe(ABNORMAL_CLOSURE);
+
+    const back = await server.connect();
+    back.send({ type: 'rejoin-room', roomId, sessionToken: joined.sessionToken });
+    expect(await back.next()).toMatchObject({ type: 'joined', peerId: joined.peerId });
+  });
+
+  it('keeps sockets that answer the pings', async () => {
+    const { host, roomId } = await createRoom();
+    const { phone } = await joinRoom(host, roomId);
+    expect(await host.collect(HEARTBEAT_INTERVAL_MS * 4)).toEqual([]);
+    expect(await phone.staysOpen()).toBe(true);
+  });
+
+  it('gives the host more missed pings than a phone: dropping it would end the room', async () => {
+    const host = await server.connect(undefined, false);
+    host.send({ type: 'create-room' });
+    const created = await host.next();
+    if (created.type !== 'room-created') throw new Error(`Expected room-created, got ${JSON.stringify(created)}`);
+    const { phone } = await joinRoom(host, created.roomId);
+    // A phone would be gone after two intervals
+    expect(await phone.collect(HEARTBEAT_INTERVAL_MS * 3)).toEqual([]);
+    expect(await phone.next()).toEqual({ type: 'room-closed' });
   });
 });
 

@@ -54,8 +54,14 @@ const INPUT_INTERVAL_MS = 1000 / 60;
 const SENSOR_TIMEOUT_MS = 1000;
 // Pause between attempts to reach the signaling server again (it keeps the slot reserved for 15 s)
 const REJOIN_RETRY_MS = 2000;
+// Then stop trying: the server keeps the slot for 15 s after noticing the lost connection (its heartbeat takes up to
+// 10 s for one that died without a close). Later the slot is gone for sure, more attempts only drain the battery.
+const REJOIN_GIVE_UP_MS = 30_000;
 // 'disconnected' is often only a short gap that ICE bridges on its own – restart only if it lasts longer
 const ICE_RESTART_DELAY_MS = 2000;
+// The host answers an ICE-restart offer within moments. No answer: the server connection is probably dead without
+// the browser noticing (network switch) and the offer got lost – so reconnect to the server and restart again.
+const ICE_RESTART_ANSWER_TIMEOUT_MS = 5000;
 const enqueue = createQueue((err) => log(`❌ ${String(err)}`));
 
 let signaling: SignalingClient;
@@ -71,7 +77,10 @@ let joined = false;
 let roomSession: StoredSession | undefined;
 // Server connection lost: reconnecting until the server answers the rejoin
 let rejoining = false;
+// When the server connection was lost, for REJOIN_GIVE_UP_MS
+let rejoinStartedAt = 0;
 let iceRestartTimer: number | undefined;
+let restartAnswerTimer: number | undefined;
 let ready = false;
 // The ready button needs all three (updateReadyButton): steering works, a car (host's role message), still the lobby
 let sensorsActive = false;
@@ -158,21 +167,53 @@ function handleSignalingClose(): void {
   // A WebRTC connection that still works keeps the car driving: only tell the player when it's gone too
   if (pc?.connectionState !== 'connected') setStatus('Verbindung verloren – verbinde neu …', 'disconnected');
   // First attempt right away, further ones (closed again before the server answered) after a pause
-  window.setTimeout(() => void rejoin(), rejoining ? REJOIN_RETRY_MS : 0);
+  const firstAttempt = !rejoining;
+  if (firstAttempt) rejoinStartedAt = performance.now();
   rejoining = true;
+  window.setTimeout(() => void rejoin(), firstAttempt ? 0 : REJOIN_RETRY_MS);
 }
 
 async function rejoin(): Promise<void> {
-  try {
-    signaling = await SignalingClient.connect(handleServerMessage, handleSignalingClose);
-  } catch {
-    if (roomSession) window.setTimeout(() => void rejoin(), REJOIN_RETRY_MS);
+  // Gave up meanwhile (e.g. left the room) → stop trying
+  if (!roomSession) return;
+  if (performance.now() - rejoinStartedAt > REJOIN_GIVE_UP_MS) {
+    const message = 'Signaling-Server nicht erreichbar';
+    if (!loseSlot(message)) giveUp(message);
     return;
   }
-  // Both checks: gave up meanwhile (e.g. the DataChannel closed) → stop trying
-  if (!roomSession) return;
+  let client: SignalingClient;
+  try {
+    client = await SignalingClient.connect(handleServerMessage, handleSignalingClose);
+  } catch {
+    window.setTimeout(() => void rejoin(), REJOIN_RETRY_MS);
+    return;
+  }
+  // Gave up while connecting: its answers must not bring the session back
+  if (!roomSession) {
+    client.close();
+    return;
+  }
+  signaling = client;
   log('Signaling-Server wieder erreichbar – hole den Platz zurück …');
   signaling.send({ type: 'rejoin-room', roomId: roomSession.roomId, sessionToken: roomSession.sessionToken });
+}
+
+/** No session to take back anymore – a reload joins as a new player. */
+function forgetSession(): void {
+  roomSession = undefined;
+  rejoining = false;
+  clearSession();
+}
+
+/**
+ * The slot is gone (room closed, away too long, server restarted): the token can't bring it back.
+ * @returns true if the WebRTC connection still works – it doesn't need the server, the car keeps driving
+ */
+function loseSlot(message: string): boolean {
+  forgetSession();
+  if (pc?.connectionState !== 'connected') return false;
+  log(`${message} – weiter ohne Server`);
+  return true;
 }
 
 /**
@@ -188,9 +229,10 @@ function leaveRoom(): void {
 
 /** Nothing left to restore: back to the join screen, ready for the next room – joining again makes a new player. */
 function giveUp(message: string): void {
-  roomSession = undefined;
-  rejoining = false;
-  clearSession();
+  forgetSession();
+  // Done with the server too: a late answer (e.g. 'joined' to a rejoin still on its way) must not bring the
+  // session back. Joining again reloads the page with a new connection anyway.
+  signaling.close();
   closeConnection();
   helloButton.disabled = true;
   readyButton.disabled = true;
@@ -334,8 +376,9 @@ function handleServerMessage(msg: ServerMessage): void {
       log(`Raum ${rejoined ? 'wieder ' : ''}beigetreten als ${msg.peerId}`);
       // No connection: just joined, the page was reloaded, or the old one couldn't be restored
       if (!pc) startConnection(rejoined);
-      // Signals sent while away got lost: a connection that didn't survive needs a new path
-      else if (pc.connectionState !== 'connected') restartIce(pc);
+      // Signals sent while away got lost: a connection that didn't survive needs a new path, and an offer still
+      // waiting for its answer won't get one anymore
+      else if (pc.connectionState !== 'connected' || pc.signalingState !== 'stable') restartIce(pc, true);
       break;
     }
     case 'signal': {
@@ -353,15 +396,25 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'session-taken-over':
       giveUp('Sitzung wurde woanders fortgesetzt');
       break;
+    case 'rejoin-failed': {
+      // A late answer after giving up
+      if (!rejoining || !roomSession) break;
+      const { roomId } = roomSession;
+      if (loseSlot(msg.message)) break;
+      // Only the slot may be gone, not the room (e.g. the page was restored long after it was left): join it as a
+      // new player. If the room is gone too, the error below brings the code field.
+      log(`${msg.message} – trete als neuer Spieler bei`);
+      setStatus('Trete dem Raum neu bei …');
+      closeConnection();
+      joined = false;
+      signaling.send({ type: 'join-room', roomId });
+      break;
+    }
     case 'error':
+      // Not about the rejoin (that answers with 'rejoin-failed'), e.g. a signal sent before the server knew this
+      // socket again: the rejoin goes on
       if (rejoining) {
-        // Slot or room gone (away too long, host left, server restarted): nothing to take back
-        rejoining = false;
-        roomSession = undefined;
-        clearSession();
-        // A connection that still works doesn't need the server
-        if (pc?.connectionState === 'connected') log(`${msg.message} – weiter ohne Server`);
-        else giveUp(msg.message);
+        log(`❌ ${msg.message}`);
         break;
       }
       // Before 'joined' the error is about joining (e.g. room not found) → back to the code field
@@ -474,6 +527,7 @@ function replaceConnection(): void {
 /** Its channels' close events come later and are ignored (connection !== pc). */
 function closeConnection(): void {
   window.clearTimeout(iceRestartTimer);
+  window.clearTimeout(restartAnswerTimer);
   window.clearInterval(inputTimer);
   window.clearInterval(pathTimer);
   pc?.close();
@@ -502,8 +556,11 @@ function handleConnectionState(connection: RTCPeerConnection): void {
   }
 }
 
-/** The phone always makes the offer, also for a restart – the host answers it on its existing connection. */
-function restartIce(connection: RTCPeerConnection): void {
+/**
+ * The phone always makes the offer, also for a restart – the host answers it on its existing connection.
+ * afterRejoin: the server connection was new, so an offer still waiting for its answer won't get one anymore.
+ */
+function restartIce(connection: RTCPeerConnection, afterRejoin = false): void {
   window.clearTimeout(iceRestartTimer);
   // The new path is negotiated over the server: while rejoining, 'joined' starts the restart
   if (rejoining) return;
@@ -512,8 +569,17 @@ function restartIce(connection: RTCPeerConnection): void {
     if (connection.connectionState === 'failed') giveUp('Verbindung zum Host verloren');
     return;
   }
-  log('ICE-Neustart …');
   enqueue(async () => {
+    // Replaced or closed meanwhile
+    if (connection !== pc) return;
+    // One restart at a time ('disconnected' and then 'failed' both ask for one): a second offer would get answers
+    // mixed up between the two. If the answer doesn't come, restartAnswerTimer takes care of it. After a rejoin,
+    // the new offer simply replaces the waiting one (allowed in 'have-local-offer').
+    if (connection.signalingState !== 'stable' && !afterRejoin) {
+      log('ICE-Neustart läuft schon – warte auf die Antwort');
+      return;
+    }
+    log('ICE-Neustart …');
     await connection.setLocalDescription(await connection.createOffer({ iceRestart: true }));
     signaling.send({
       type: 'signal',
@@ -521,7 +587,20 @@ function restartIce(connection: RTCPeerConnection): void {
       data: { kind: 'description', description: connection.localDescription!.toJSON() },
     });
     log('ICE-Neustart: Offer gesendet');
+    window.clearTimeout(restartAnswerTimer);
+    restartAnswerTimer = window.setTimeout(() => checkRestartAnswer(connection), ICE_RESTART_ANSWER_TIMEOUT_MS);
   });
+}
+
+/**
+ * Still no answer to the restart offer: the server connection is probably dead, but still OPEN for the browser – it
+ * notices that only after minutes. Drop it and rejoin like after a close; 'joined' starts the restart again.
+ */
+function checkRestartAnswer(connection: RTCPeerConnection): void {
+  if (connection !== pc || connection.signalingState !== 'have-local-offer' || rejoining || !roomSession) return;
+  log('Keine Antwort auf den ICE-Neustart – verbinde neu mit dem Server');
+  signaling.close();
+  handleSignalingClose();
 }
 
 async function refreshPath(connection: RTCPeerConnection): Promise<void> {

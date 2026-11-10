@@ -1,8 +1,10 @@
 /**
  * Keeps the session token a phone got on joining a room ('joined', see protocol.ts), so it can take its slot in
  * the room back after losing the connection.
- * sessionStorage instead of localStorage: it survives a reload of the tab, but every tab has its own – a second
- * tab with the same link joins as a new player instead of taking over the first one's slot.
+ * sessionStorage instead of localStorage: it survives a reload of the tab, and a second tab opened with the same
+ * link joins as a new player instead of taking over the first one's slot. Exception: a duplicated tab gets a copy
+ * of the original's sessionStorage, so it takes the slot over ('session-taken-over' sends the original back to the
+ * join screen).
  */
 
 const STORAGE_KEY = 'apiracer.session';

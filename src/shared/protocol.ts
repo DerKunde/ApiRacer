@@ -78,6 +78,9 @@ export type ServerMessage =
   // or the two would keep taking the slot from each other
   | { type: 'session-taken-over' }
   | { type: 'signal'; from: PeerId; data: SignalData }
+  // Answer to 'rejoin-room' when the slot can't be taken back (room closed, grace over, wrong token). Its own type:
+  // the phone gives up its session only for this, not for any error that arrives while it rejoins.
+  | { type: 'rejoin-failed'; message: string }
   | { type: 'error'; message: string };
 
 /** Phone ↔ PC, directly over the RTCDataChannel */

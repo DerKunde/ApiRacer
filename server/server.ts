@@ -66,14 +66,39 @@ const ALLOWED_ORIGIN = 'https://stud.messy-desk-studio.de';
 const TURN_URLS = process.env.TURN_URLS?.split(',');
 const TURN_SECRET = process.env.TURN_SECRET;
 const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
+
+/**
+ * A duration in ms from the environment. A typo ('15s', empty) would otherwise become NaN, and a timer with NaN
+ * fires at once: better not to start at all.
+ */
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (raw.trim() === '' || !Number.isFinite(value) || value < 0) {
+    console.error(`${name}=${raw} ist keine Dauer in ms`);
+    process.exit(1);
+  }
+  return value;
+}
+
 // How long a phone's slot stays reserved after its connection broke (screen locked, network switch).
 // Not much longer: until then the host keeps the player, so a racer who really left blocks the start meanwhile.
 // The tests shorten it, so they don't wait 15 s for every 'peer-left'.
-const REJOIN_GRACE_MS = Number(process.env.REJOIN_GRACE_MS ?? 15000);
+const REJOIN_GRACE_MS = envMs('REJOIN_GRACE_MS', 15000);
 // Same after a close with GOING_AWAY: the browser closed the page itself (tab closed, reload, other page). A reload is
 // back within a second or two; a locked screen drops the socket without a close frame and gets the full grace.
 // Never longer than REJOIN_GRACE_MS.
-const GOING_AWAY_GRACE_MS = Math.min(REJOIN_GRACE_MS, Number(process.env.GOING_AWAY_GRACE_MS ?? 5000));
+const GOING_AWAY_GRACE_MS = Math.min(REJOIN_GRACE_MS, envMs('GOING_AWAY_GRACE_MS', 5000));
+// A connection can die without a close (network switch, phone out of range): both sides keep the socket OPEN, the
+// slot is never released and the host never hears 'peer-away'. So every socket gets a ping this often (the browser
+// answers it by itself, no page code involved), and one that misses too many pongs is dropped. The tests shorten it.
+const HEARTBEAT_INTERVAL_MS = envMs('HEARTBEAT_INTERVAL_MS', 5000);
+// Pings in a row a socket may leave unanswered. A phone keeps its slot for the rejoin grace after being dropped, so
+// 5–10 s are enough. The host gets longer: dropping it ends the room for every phone, and a laptop's short Wi-Fi
+// dropout must not do that.
+const MAX_MISSED_PONGS_PHONE = 1;
+const MAX_MISSED_PONGS_HOST = 6;
 
 /** A phone in a room. */
 interface Controller {
@@ -109,6 +134,8 @@ interface Limits {
 
 const rooms = new Map<string, Room>();
 const memberships = new Map<WebSocket, Membership>();
+// Pings since the socket's last pong (see HEARTBEAT_INTERVAL_MS)
+const missedPongs = new WeakMap<WebSocket, number>();
 
 function send(ws: WebSocket, msg: ServerMessage): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -161,8 +188,9 @@ function lanAddresses(): string[] {
 
 // Every join that doesn't get the socket into a room counts as a wrong code. Also "Raum voll": otherwise it would
 // confirm that a code exists without using up the guesses.
-function failJoin(ws: WebSocket, limits: Limits, message: string): void {
-  send(ws, { type: 'error', message });
+// rejoin: answers a 'rejoin-room' – the phone has to tell that apart from any other error (see 'rejoin-failed').
+function failJoin(ws: WebSocket, limits: Limits, message: string, rejoin = false): void {
+  send(ws, rejoin ? { type: 'rejoin-failed', message } : { type: 'error', message });
   if (++limits.failedJoins >= MAX_FAILED_JOINS) {
     ws.close(POLICY_VIOLATION, 'Zu viele falsche Raumcodes');
     console.log(`Verbindung nach ${MAX_FAILED_JOINS} falschen Raumcodes geschlossen`);
@@ -208,10 +236,10 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
     case 'rejoin-room': {
       if (membership) return send(ws, { type: 'error', message: 'Bereits in einem Raum' });
       const room = rooms.get(msg.roomId.trim().toUpperCase());
-      if (!room) return failJoin(ws, limits, `Raum ${msg.roomId} nicht gefunden`);
+      if (!room) return failJoin(ws, limits, `Raum ${msg.roomId} nicht gefunden`, true);
       const slot = [...room.controllers].find(([, controller]) => controller.sessionToken === msg.sessionToken);
       // Counts as a failed join too: otherwise tokens could be guessed over one connection without limit
-      if (!slot) return failJoin(ws, limits, 'Sitzung abgelaufen – bitte neu beitreten');
+      if (!slot) return failJoin(ws, limits, 'Sitzung abgelaufen – bitte neu beitreten', true);
       const [peerId, controller] = slot;
       clearTimeout(controller.releaseTimer);
       controller.releaseTimer = undefined;
@@ -389,6 +417,23 @@ const wss = new WebSocketServer({
   },
 });
 
+// See HEARTBEAT_INTERVAL_MS. terminate() instead of close(): a dead connection would never answer the close frame.
+// The close event follows with 1006 like for any dropped connection, so a phone's slot stays reserved.
+const heartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    const missed = missedPongs.get(ws) ?? 0;
+    const maxMissed = memberships.get(ws)?.peerId === HOST_ID ? MAX_MISSED_PONGS_HOST : MAX_MISSED_PONGS_PHONE;
+    if (missed >= maxMissed) {
+      console.log(`Verbindung antwortet nicht mehr (${missed} Pings ohne Pong) – getrennt`);
+      ws.terminate();
+      continue;
+    }
+    missedPongs.set(ws, missed + 1);
+    ws.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+wss.on('close', () => clearInterval(heartbeat));
+
 let listening = false;
 // Only once the port is really open. With PORT=0 the OS picks a free one (the tests do that), printed here.
 wss.on('listening', () => {
@@ -410,6 +455,7 @@ wss.on('error', (error) => {
 
 wss.on('connection', (ws) => {
   const limits: Limits = { failedJoins: 0, tokens: MESSAGE_BURST, refilledAt: performance.now() };
+  ws.on('pong', () => missedPongs.set(ws, 0));
   const joinTimer = setTimeout(() => {
     if (!memberships.has(ws)) ws.close(NORMAL_CLOSURE, 'Keinem Raum beigetreten');
   }, JOIN_TIMEOUT_MS);
