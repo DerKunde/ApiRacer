@@ -23,7 +23,7 @@ const MAX_OUTPUT_CHARS = 20000;
 const LISTENING = /Signaling-Server läuft auf ws:\/\/[\d.]+:(\d+)/;
 // From the developer's shell, they would change how the server behaves on one machine but not on another.
 // Tests that need one pass it to startServer.
-const SERVER_ENV_KEYS = ['NODE_ENV', 'TURN_URLS', 'TURN_SECRET'];
+const SERVER_ENV_KEYS = ['NODE_ENV', 'TURN_URLS', 'TURN_SECRET', 'REJOIN_GRACE_MS'];
 
 export interface TestServer {
   url: string;

@@ -9,8 +9,12 @@ const ANSWER: SignalData = { kind: 'description', description: { type: 'answer',
 
 let server: TestServer;
 
+// How long the server keeps a phone's slot here: long enough to rejoin in the tests, short enough to wait for
+// 'peer-left' (below the 2 s of next())
+const REJOIN_GRACE_MS = 500;
+
 beforeAll(async () => {
-  server = await startServer();
+  server = await startServer({ REJOIN_GRACE_MS: String(REJOIN_GRACE_MS) });
 });
 // server is unset if beforeAll failed: without ?. a TypeError would cover up the real error
 afterEach(() => server?.closeClients());
@@ -71,10 +75,11 @@ describe('rooms', () => {
     expect(await phone.next()).toEqual({ type: 'error', message: 'Bereits in einem Raum' });
   });
 
-  it('tells the host when a phone leaves', async () => {
+  it('tells the host when a phone leaves, once its slot was kept for the rejoin grace', async () => {
     const { host, roomId } = await createRoom();
     const { phone, peerId } = await joinRoom(host, roomId);
     phone.close();
+    expect(await host.collect(REJOIN_GRACE_MS / 2)).toEqual([]);
     expect(await host.next()).toEqual({ type: 'peer-left', peerId });
   });
 
@@ -87,6 +92,63 @@ describe('rooms', () => {
     const latecomer = await server.connect();
     latecomer.send({ type: 'join-room', roomId });
     expect(await latecomer.next()).toEqual({ type: 'error', message: `Raum ${roomId} nicht gefunden` });
+  });
+});
+
+describe('rejoining', () => {
+  // Joins and returns the session token from 'joined' as well
+  async function joinWithToken(host: TestClient, roomId: string): Promise<{ phone: TestClient; peerId: string; sessionToken: string }> {
+    const phone = await server.connect();
+    phone.send({ type: 'join-room', roomId });
+    const msg = await phone.next();
+    if (msg.type !== 'joined') throw new Error(`Expected joined, got ${JSON.stringify(msg)}`);
+    expect(await host.next()).toEqual({ type: 'peer-joined', peerId: msg.peerId });
+    return { phone, peerId: msg.peerId, sessionToken: msg.sessionToken };
+  }
+
+  it('gives a phone that lost its socket its slot back with the session token', async () => {
+    const { host, roomId } = await createRoom();
+    const { phone, peerId, sessionToken } = await joinWithToken(host, roomId);
+    phone.close();
+
+    const back = await server.connect();
+    back.send({ type: 'rejoin-room', roomId, sessionToken });
+    expect(await back.next()).toMatchObject({ type: 'joined', roomId, peerId, sessionToken });
+    expect(await host.next()).toEqual({ type: 'peer-rejoined', peerId });
+    // The slot is taken again: no 'peer-left' once the grace is over
+    expect(await host.collect(REJOIN_GRACE_MS + 200)).toEqual([]);
+
+    back.send({ type: 'signal', to: 'host', data: OFFER });
+    expect(await host.next()).toEqual({ type: 'signal', from: peerId, data: OFFER });
+  });
+
+  it('hands the slot to the newer socket and drops the old one', async () => {
+    const { host, roomId } = await createRoom();
+    const { phone, peerId, sessionToken } = await joinWithToken(host, roomId);
+
+    const duplicate = await server.connect();
+    duplicate.send({ type: 'rejoin-room', roomId, sessionToken });
+    expect(await duplicate.next()).toMatchObject({ type: 'joined', peerId });
+    expect(await phone.next()).toEqual({ type: 'session-taken-over' });
+    await phone.closed;
+    // The old socket's close is no leave
+    expect(await host.next()).toEqual({ type: 'peer-rejoined', peerId });
+    expect(await host.collect(REJOIN_GRACE_MS + 200)).toEqual([]);
+  });
+
+  it('refuses a wrong token and a slot whose grace is over', async () => {
+    const { host, roomId } = await createRoom();
+    const { phone, peerId, sessionToken } = await joinWithToken(host, roomId);
+
+    const guesser = await server.connect();
+    guesser.send({ type: 'rejoin-room', roomId, sessionToken: 'not-the-token' });
+    expect(await guesser.next()).toEqual({ type: 'error', message: 'Sitzung abgelaufen – bitte neu beitreten' });
+
+    phone.close();
+    expect(await host.next()).toEqual({ type: 'peer-left', peerId });
+    const late = await server.connect();
+    late.send({ type: 'rejoin-room', roomId, sessionToken });
+    expect(await late.next()).toEqual({ type: 'error', message: 'Sitzung abgelaufen – bitte neu beitreten' });
   });
 });
 
@@ -107,7 +169,7 @@ describe('relaying the connection setup', () => {
     const other = await joinRoom(host, roomId);
 
     phone.send({ type: 'signal', to: other.peerId, data: OFFER });
-    expect(await phone.next()).toEqual({ type: 'error', message: `Empfänger ${other.peerId} unbekannt` });
+    expect(await phone.next()).toEqual({ type: 'error', message: `Empfänger ${other.peerId} nicht erreichbar` });
     expect(await other.phone.collect(200)).toEqual([]);
   });
 

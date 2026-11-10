@@ -13,7 +13,8 @@ const INVALID = { type: 'error', message: 'Ungültige Nachricht' };
 let server: TestServer;
 
 beforeAll(async () => {
-  server = await startServer();
+  // A short rejoin grace: 'peer-left' comes 100 ms after a phone's socket closed instead of 30 s
+  server = await startServer({ REJOIN_GRACE_MS: '100' });
 });
 // server is unset if beforeAll failed: without ?. a TypeError would cover up the real error
 afterEach(() => server?.closeClients());

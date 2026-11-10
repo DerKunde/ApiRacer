@@ -66,7 +66,8 @@ const TURN_SECRET = process.env.TURN_SECRET;
 const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
 // How long a phone's slot stays reserved after its connection broke (screen locked, network switch, reload).
 // Not much longer: until then the host keeps the player, so a racer who really left blocks the start meanwhile.
-const REJOIN_GRACE_MS = 30000;
+// The tests shorten it, so they don't wait 30 s for every 'peer-left'.
+const REJOIN_GRACE_MS = Number(process.env.REJOIN_GRACE_MS ?? 30000);
 
 /** A phone in a room. */
 interface Controller {
