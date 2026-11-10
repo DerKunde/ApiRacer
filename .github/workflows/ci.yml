@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  # Every branch, not tags (those deploy). PRs from this repo show the checks of their head commit.
+  push:
+    branches: ['**']
+  # Called by the deploy workflow: nothing gets deployed that fails here
+  workflow_call:
+
+# A newer push to the same branch makes the older run pointless. With the workflow name in the group, a run called
+# by a deploy never cancels a push run or the other way around.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Runs the typecheck first
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
