@@ -23,7 +23,7 @@ const MAX_OUTPUT_CHARS = 20000;
 const LISTENING = /Signaling-Server läuft auf ws:\/\/[\d.]+:(\d+)/;
 // From the developer's shell, they would change how the server behaves on one machine but not on another.
 // Tests that need one pass it to startServer.
-const SERVER_ENV_KEYS = ['NODE_ENV', 'TURN_URLS', 'TURN_SECRET', 'REJOIN_GRACE_MS'];
+const SERVER_ENV_KEYS = ['NODE_ENV', 'TURN_URLS', 'TURN_SECRET', 'REJOIN_GRACE_MS', 'GOING_AWAY_GRACE_MS'];
 
 export interface TestServer {
   url: string;
@@ -200,7 +200,8 @@ export class TestClient {
     return this.inbox.splice(0);
   }
 
-  close(): void {
-    this.ws.close();
+  // code: e.g. 1001 like a browser whose page is closed or reloaded; none = like a dropped connection
+  close(code?: number): void {
+    this.ws.close(code);
   }
 }

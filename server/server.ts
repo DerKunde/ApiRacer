@@ -55,8 +55,10 @@ const JOIN_TIMEOUT_MS = 10_000;
 // Time a closed socket has to answer the close frame, then the server drops it. ws waits 30 s by default: a script
 // that never answers would keep its room and its place under MAX_CONNECTIONS that long. A real browser answers at once.
 const CLOSE_TIMEOUT_MS = 2000;
-// Close codes (RFC 6455): done, nothing wrong / a client that breaks the rules
+// Close codes (RFC 6455): done, nothing wrong / page closed or left (sent by the browser) / a client that breaks the
+// rules
 const NORMAL_CLOSURE = 1000;
+const GOING_AWAY = 1001;
 const POLICY_VIOLATION = 1008;
 
 // Only the own pages may connect in production. Keeps other websites out – scripts can still fake the origin.
@@ -64,10 +66,14 @@ const ALLOWED_ORIGIN = 'https://stud.messy-desk-studio.de';
 const TURN_URLS = process.env.TURN_URLS?.split(',');
 const TURN_SECRET = process.env.TURN_SECRET;
 const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
-// How long a phone's slot stays reserved after its connection broke (screen locked, network switch, reload).
+// How long a phone's slot stays reserved after its connection broke (screen locked, network switch).
 // Not much longer: until then the host keeps the player, so a racer who really left blocks the start meanwhile.
-// The tests shorten it, so they don't wait 30 s for every 'peer-left'.
-const REJOIN_GRACE_MS = Number(process.env.REJOIN_GRACE_MS ?? 30000);
+// The tests shorten it, so they don't wait 15 s for every 'peer-left'.
+const REJOIN_GRACE_MS = Number(process.env.REJOIN_GRACE_MS ?? 15000);
+// Same after a close with GOING_AWAY: the browser closed the page itself (tab closed, reload, other page). A reload is
+// back within a second or two; a locked screen drops the socket without a close frame and gets the full grace.
+// Never longer than REJOIN_GRACE_MS.
+const GOING_AWAY_GRACE_MS = Math.min(REJOIN_GRACE_MS, Number(process.env.GOING_AWAY_GRACE_MS ?? 5000));
 
 /** A phone in a room. */
 interface Controller {
@@ -225,6 +231,21 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
       return;
     }
 
+    case 'leave-room': {
+      if (!membership) return send(ws, { type: 'error', message: 'Nicht in einem Raum' });
+      const { room, peerId } = membership;
+      // The host closes its page instead, which ends the room for every phone (handleClose)
+      if (peerId === HOST_ID) return send(ws, { type: 'error', message: 'Nur Handys können den Raum verlassen' });
+      memberships.delete(ws);
+      room.controllers.delete(peerId);
+      send(room.host, { type: 'peer-left', peerId, reason: 'left' });
+      console.log(`[${room.id}] ${peerId} hat den Raum verlassen`);
+      // Without a room the socket is of no use anymore, like after 'room-closed'. Not a member anymore, so its
+      // close is no second leave.
+      ws.close(NORMAL_CLOSURE, 'Raum verlassen');
+      return;
+    }
+
     case 'signal': {
       if (!membership) return send(ws, { type: 'error', message: 'Nicht in einem Raum' });
       const { room, peerId } = membership;
@@ -248,7 +269,8 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
   }
 }
 
-function handleClose(ws: WebSocket): void {
+/** code: the close code, GOING_AWAY when the browser closed the page itself. */
+function handleClose(ws: WebSocket, code: number): void {
   const membership = memberships.get(ws);
   if (!membership) return;
   memberships.delete(ws);
@@ -268,15 +290,21 @@ function handleClose(ws: WebSocket): void {
   } else {
     const controller = room.controllers.get(peerId);
     if (!controller) return;
-    // Not gone yet: the phone may only have lost its connection. Its slot stays reserved for a rejoin with the
-    // session token, and the host keeps the player meanwhile.
+    // Not gone yet: the phone may only have lost its connection, or its page is reloading. Its slot stays reserved
+    // for a rejoin with the session token, and the host keeps the player meanwhile.
+    const pageClosed = code === GOING_AWAY;
+    const graceMs = pageClosed ? GOING_AWAY_GRACE_MS : REJOIN_GRACE_MS;
     controller.ws = undefined;
     controller.releaseTimer = setTimeout(() => {
       room.controllers.delete(peerId);
-      send(room.host, { type: 'peer-left', peerId });
+      // A closed page that didn't come back was closed on purpose, a lost connection simply didn't come back
+      send(room.host, { type: 'peer-left', peerId, reason: pageClosed ? 'left' : 'timeout' });
       console.log(`[${room.id}] ${peerId} nicht zurückgekommen – gegangen`);
-    }, REJOIN_GRACE_MS);
-    console.log(`[${room.id}] ${peerId} Verbindung verloren, Platz bleibt ${REJOIN_GRACE_MS / 1000} s reserviert`);
+    }, graceMs);
+    send(room.host, { type: 'peer-away', peerId, graceMs });
+    // The close code tells why: 1001 = the browser closed the page, 1006 = connection dropped without a close frame
+    // (e.g. iOS locking the screen)
+    console.log(`[${room.id}] ${peerId} Verbindung verloren (Code ${code}), Platz bleibt ${graceMs / 1000} s reserviert`);
   }
 }
 
@@ -337,6 +365,8 @@ function isClientMessage(value: unknown): value is ClientMessage {
       return isId(value.roomId);
     case 'rejoin-room':
       return isId(value.roomId) && typeof value.sessionToken === 'string' && value.sessionToken.length <= MAX_SESSION_TOKEN_LENGTH;
+    case 'leave-room':
+      return true;
     case 'signal':
       return isId(value.to) && isSignalData(value.data);
     default:
@@ -413,8 +443,8 @@ wss.on('connection', (ws) => {
     }
   });
   ws.on('error', (error) => console.error('WebSocket-Fehler:', error.message));
-  ws.on('close', () => {
+  ws.on('close', (code) => {
     clearTimeout(joinTimer);
-    handleClose(ws);
+    handleClose(ws, code);
   });
 });

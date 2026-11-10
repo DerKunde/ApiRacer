@@ -52,7 +52,7 @@ const HOLDING_TEXT: Record<DeviceHolding, string> = {
 const INPUT_INTERVAL_MS = 1000 / 60;
 // How long to wait for a first sensor event before assuming none will come (no permission or no sensors)
 const SENSOR_TIMEOUT_MS = 1000;
-// Pause between attempts to reach the signaling server again (it keeps the slot reserved for 30 s)
+// Pause between attempts to reach the signaling server again (it keeps the slot reserved for 15 s)
 const REJOIN_RETRY_MS = 2000;
 // 'disconnected' is often only a short gap that ICE bridges on its own – restart only if it lasts longer
 const ICE_RESTART_DELAY_MS = 2000;
@@ -86,8 +86,21 @@ let inputSeq = 0;
 let inputTimer: number | undefined;
 let pathTimer: number | undefined;
 
-function setStatus(text: string): void {
+/**
+ * state picks the icon in front of the text (.status[data-state] in style.css):
+ * 'connected' → link, 'disconnected' → link_off, none → no icon (while connecting).
+ */
+function setStatus(text: string, state?: 'connected' | 'disconnected'): void {
   statusEl.textContent = text;
+  if (state) statusEl.dataset.state = state;
+  else delete statusEl.dataset.state;
+}
+
+/** Connected to the host: what the player is doing in the room right now. */
+function setConnectedStatus(): void {
+  const roomId = roomSession?.roomId ?? '';
+  if (raceStarted) setStatus(racer ? 'Rennen läuft' : 'Rennen läuft – du schaust zu', 'connected');
+  else setStatus(racer ? `Verbunden zu ${roomId}` : 'Zuschauer – du hast kein Auto', 'connected');
 }
 
 /**
@@ -142,6 +155,8 @@ function handleSignalingClose(): void {
   log('Signaling-Verbindung geschlossen');
   // Not in a room (anymore): nothing to take back
   if (!roomSession) return;
+  // A WebRTC connection that still works keeps the car driving: only tell the player when it's gone too
+  if (pc?.connectionState !== 'connected') setStatus('Verbindung verloren – verbinde neu …', 'disconnected');
   // First attempt right away, further ones (closed again before the server answered) after a pause
   window.setTimeout(() => void rejoin(), rejoining ? REJOIN_RETRY_MS : 0);
   rejoining = true;
@@ -158,6 +173,17 @@ async function rejoin(): Promise<void> {
   if (!roomSession) return;
   log('Signaling-Server wieder erreichbar – hole den Platz zurück …');
   signaling.send({ type: 'rejoin-room', roomId: roomSession.roomId, sessionToken: roomSession.sessionToken });
+}
+
+/**
+ * "Raum verlassen": frees the slot right away instead of after the rejoin grace, so the host doesn't wait for a player
+ * who left on purpose. Without a server connection the message is lost – then the slot is freed after the grace.
+ */
+function leaveRoom(): void {
+  if (!confirm('Raum wirklich verlassen? Dein Auto wird entfernt.')) return;
+  signaling.send({ type: 'leave-room' });
+  log('Raum verlassen');
+  giveUp('Du hast den Raum verlassen');
 }
 
 /** Nothing left to restore: back to the join screen, ready for the next room – joining again makes a new player. */
@@ -307,7 +333,7 @@ function handleServerMessage(msg: ServerMessage): void {
       byId('peer-id').textContent = msg.peerId;
       log(`Raum ${rejoined ? 'wieder ' : ''}beigetreten als ${msg.peerId}`);
       // No connection: just joined, the page was reloaded, or the old one couldn't be restored
-      if (!pc) startConnection(msg.roomId, rejoined);
+      if (!pc) startConnection(rejoined);
       // Signals sent while away got lost: a connection that didn't survive needs a new path
       else if (pc.connectionState !== 'connected') restartIce(pc);
       break;
@@ -346,7 +372,7 @@ function handleServerMessage(msg: ServerMessage): void {
 }
 
 /** newConnection: replaces this player's old connection (see SignalData) – the host swaps it in for the same car. */
-function startConnection(roomId: string, newConnection: boolean): void {
+function startConnection(newConnection: boolean): void {
   setStatus('Baue WebRTC-Verbindung auf …');
   const connection = new RTCPeerConnection(createRtcConfig(iceServers));
   pc = connection;
@@ -374,16 +400,14 @@ function startConnection(roomId: string, newConnection: boolean): void {
       case 'role':
         racer = msg.racer;
         updateReadyButton();
-        if (!racer) {
-          setStatus('Zuschauer – du hast kein Auto');
-          log('Kein Auto: du schaust zu');
-        }
+        setConnectedStatus();
+        if (!racer) log('Kein Auto: du schaust zu');
         break;
       // Lobby is over: changing your mind about being ready no longer matters
       case 'race-start':
         raceStarted = true;
         updateReadyButton();
-        setStatus(racer ? 'Rennen läuft' : 'Rennen läuft – du schaust zu');
+        setConnectedStatus();
         log('🏁 Rennen gestartet');
         break;
     }
@@ -391,7 +415,7 @@ function startConnection(roomId: string, newConnection: boolean): void {
 
   channel = connection.createDataChannel(CONTROL_CHANNEL_LABEL, CONTROL_CHANNEL_OPTIONS);
   channel.onopen = () => {
-    setStatus(`Verbunden zu ${roomId}`);
+    setConnectedStatus();
     helloButton.disabled = false;
     log('DataChannel offen');
     pathTimer = window.setInterval(() => void refreshPath(connection), 2000);
@@ -403,7 +427,7 @@ function startConnection(roomId: string, newConnection: boolean): void {
   channel.onclose = () => {
     // Closed here on purpose (closeConnection): whoever closed it takes care of what comes next
     if (connection !== pc) return;
-    setStatus('Verbindung getrennt');
+    setStatus('Verbindung getrennt – baue sie neu auf …', 'disconnected');
     helloButton.disabled = true;
     // Closed by the host, or the connection is dead for good: an ICE restart can't bring a DataChannel back
     replaceConnection();
@@ -444,7 +468,7 @@ function replaceConnection(): void {
   if (rejoining) return;
   // The server refused the rejoin: without it no new connection can be negotiated either
   if (!roomSession) return giveUp('Verbindung zum Host verloren');
-  startConnection(roomSession.roomId, true);
+  startConnection(true);
 }
 
 /** Its channels' close events come later and are ignored (connection !== pc). */
@@ -462,10 +486,19 @@ function closeConnection(): void {
  */
 function handleConnectionState(connection: RTCPeerConnection): void {
   window.clearTimeout(iceRestartTimer);
-  if (connection.connectionState === 'disconnected') {
-    iceRestartTimer = window.setTimeout(() => restartIce(connection), ICE_RESTART_DELAY_MS);
-  } else if (connection.connectionState === 'failed') {
-    restartIce(connection);
+  switch (connection.connectionState) {
+    // Also after an ICE restart: the channels stayed open, so channel.onopen doesn't say it again
+    case 'connected':
+      setConnectedStatus();
+      break;
+    case 'disconnected':
+      setStatus('Verbindung unterbrochen – stelle sie wieder her …', 'disconnected');
+      iceRestartTimer = window.setTimeout(() => restartIce(connection), ICE_RESTART_DELAY_MS);
+      break;
+    case 'failed':
+      setStatus('Verbindung unterbrochen – stelle sie wieder her …', 'disconnected');
+      restartIce(connection);
+      break;
   }
 }
 
@@ -516,6 +549,7 @@ function setDebugPanelOpen(open: boolean): void {
   byId('debug-open-btn').setAttribute('aria-expanded', String(open));
 }
 
+byId('leave-btn').addEventListener('click', leaveRoom);
 byId('debug-open-btn').addEventListener('click', () => setDebugPanelOpen(true));
 byId('debug-close-btn').addEventListener('click', () => setDebugPanelOpen(false));
 

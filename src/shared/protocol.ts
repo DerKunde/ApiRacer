@@ -7,10 +7,12 @@
  *  3. Controller sends a WebRTC offer, the host replies with an answer,
  *     both exchange ICE candidates – the server only relays these messages
  *  4. Afterwards all data flows directly over the RTCDataChannel, the server is out of the loop
- *  5. If a phone loses its connection to the server, its slot stays reserved for a while: with 'rejoin-room' and
- *     its session token it gets the same peer ID back, and the host is told it's the same player again
+ *  5. If a phone loses its connection to the server, its slot stays reserved for a while (shorter if the page was
+ *     closed): with 'rejoin-room' and its session token it gets the same peer ID back, and the host is told it's the
+ *     same player again
  *  6. A broken WebRTC connection is restored with an ICE restart. Only if that's impossible (page reloaded,
  *     DataChannels closed) the phone sets up a new one, and the host swaps it in for the same player
+ *  7. A player who leaves on purpose sends 'leave-room': the slot is freed right away
  */
 
 export type PeerId = string;
@@ -51,6 +53,8 @@ export type ClientMessage =
   | { type: 'join-room'; roomId: string }
   // sessionToken: from 'joined' – takes the reserved slot back instead of joining as a new player
   | { type: 'rejoin-room'; roomId: string; sessionToken: string }
+  // Phone only: the player leaves on purpose ("Raum verlassen") – the slot is freed right away, no rejoin
+  | { type: 'leave-room' }
   | { type: 'signal'; to: PeerId; data: SignalData };
 
 /** Server → Browser */
@@ -63,8 +67,12 @@ export type ServerMessage =
   // A phone that lost its connection is back in its slot: same player. If its WebRTC connection broke meanwhile,
   // the phone restores it with an ICE restart (a new offer on the existing connection).
   | { type: 'peer-rejoined'; peerId: PeerId }
-  // Only once a phone is really gone: either it never came back after losing its connection, or the room closed
-  | { type: 'peer-left'; peerId: PeerId }
+  // A phone lost its connection to the server: its slot stays reserved for graceMs, then 'peer-left' follows unless
+  // 'peer-rejoined' comes first. Lets the host show that the player is away instead of a frozen card.
+  | { type: 'peer-away'; peerId: PeerId; graceMs: number }
+  // Only once a phone is really gone. reason: 'left' = left on purpose ('leave-room'), 'timeout' = didn't come back
+  // within its grace after losing the connection
+  | { type: 'peer-left'; peerId: PeerId; reason: 'left' | 'timeout' }
   | { type: 'room-closed' }
   // Another connection rejoined with this phone's session token (e.g. a duplicated tab): this one must not rejoin,
   // or the two would keep taking the slot from each other

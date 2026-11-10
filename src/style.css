@@ -317,6 +317,11 @@ button.big {
   font-size: 1rem;
 }
 
+/* The icon in front of the status (.status[data-state]) makes it a flex row: keep it centered like the text */
+.race-center .status[data-state] {
+  justify-content: center;
+}
+
 /* Small text button, so it doesn't compete with the ready button */
 .debug-btn {
   padding: 6px 12px;
@@ -825,6 +830,8 @@ body[data-mode='race'] .debug-panel.open {
    --peer-color is set per card in createPeerCard – the same color as the phone's screen in the 3D view;
    the phone page doesn't know its color → plain border */
 .peer-card {
+  /* Anchor for the connection overlay on the host page */
+  position: relative;
   padding: 10px 14px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -891,6 +898,69 @@ body[data-mode='race'] .debug-panel.open {
 .peer-status {
   color: var(--muted);
   font-size: 0.9rem;
+}
+
+/* Host page: covers the card while the phone's connection is broken (renderOverlay in race/host.ts). Inside the
+   border, so the colored left edge still tells whose card it is, and only a light blur, so the name stays readable. */
+.connection-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  text-align: center;
+  border-radius: 0 11px 11px 0;
+  background: color-mix(in srgb, var(--surface) 75%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+/* display: flex above would beat the hidden attribute's display: none */
+.connection-overlay[hidden] {
+  display: none;
+}
+
+.connection-overlay strong {
+  color: var(--warn);
+}
+
+.connection-overlay p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* Runs out when the reserved slot is freed: one CSS animation over the whole grace (setAway in race/host.ts) */
+.countdown-bar {
+  width: 60%;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.countdown-bar[hidden] {
+  display: none;
+}
+
+.countdown-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--warn);
+  transform-origin: left;
+}
+
+@keyframes countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }
 
 .peer-rtt::before {

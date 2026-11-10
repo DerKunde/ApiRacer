@@ -57,7 +57,7 @@ sequenceDiagram
 2. **Join:** The phone opens the link from the QR code (or enters the room code), connects to the signaling server as well and joins the room. The host is notified.
 3. **Connection setup:** The phone creates a WebRTC offer, the host replies with an answer, and both exchange ICE candidates (possible network paths, see below). The signaling server only relays these messages.
 4. **Data:** Once connected, the phone sends its sensor values 60 times per second directly to the host over a DataChannel. The channel is unordered and doesn't retransmit lost messages (`ordered: false, maxRetransmits: 0`), like UDP. Every sensor message carries a sequence number, so the host ignores late ones.
-5. **Reconnect:** When joining, every phone gets a session token. If its connection to the signaling server breaks (screen locked, network switch, reload), the server keeps the phone's slot for 30 s, and the phone rejoins with the token and gets the same ID back. A broken WebRTC connection is restored with an ICE restart. Only if that's impossible (page reloaded, DataChannels closed) does the phone set up a new one, and the host swaps it in for the same player – car, color and role stay.
+5. **Reconnect:** When joining, every phone gets a session token. If its connection to the signaling server breaks (screen locked, network switch, reload), the server keeps the phone's slot for 15 s, and the phone rejoins with the token and gets the same ID back. A broken WebRTC connection is restored with an ICE restart. Only if that's impossible (page reloaded, DataChannels closed) does the phone set up a new one, and the host swaps it in for the same player – car, color and role stay. Meanwhile the host's card shows that the player is away and counts down. Leaving on purpose ("Raum verlassen") frees the slot right away; a closed page (close code 1001, sent by the browser) only gets 5 s, which is enough for a reload.
 
 ### Finding a path: NAT, STUN, TURN and ICE
 
@@ -243,7 +243,7 @@ Found while building and testing the project. Entries marked *(docs)* come from 
 - **Peer-to-peer still needs servers:** signaling, STUN and TURN (see [How it works](#how-it-works)). Without them, two browsers can't find each other.
 - **TURN costs latency:** With the relay forced, the ping rose from a few ms to 80–300 ms, because every packet takes the detour via the server.
 - **Browsers differ in details:** Firefox signals the end of the candidate gathering with an extra empty candidate, Chromium doesn't.
-- **Reconnect only within 30 s:** On iPhone, locking the screen closes the connection to the signaling server. The phone gets its slot back on its own (see [How it works](#how-it-works)), but only within 30 s – after that the host removes the player, and joining again makes a new one.
+- **Reconnect only within 15 s:** On iPhone, locking the screen closes the connection to the signaling server. The phone gets its slot back on its own (see [How it works](#how-it-works)), but only within 15 s – after that the host removes the player, and joining again makes a new one.
 
 **Browser detection**
 - **User agent strings are unreliable** *(docs)*: browsers pretend to be other browsers and freeze version details. The project uses feature detection instead (e.g. checking which orientation events exist).

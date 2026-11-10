@@ -12,9 +12,16 @@ let server: TestServer;
 // How long the server keeps a phone's slot here: long enough to rejoin in the tests, short enough to wait for
 // 'peer-left' (below the 2 s of next())
 const REJOIN_GRACE_MS = 500;
+// The shorter grace after a closed page (close code 1001)
+const GOING_AWAY_GRACE_MS = 100;
+// Close code a browser sends when its page is closed or reloaded
+const GOING_AWAY = 1001;
 
 beforeAll(async () => {
-  server = await startServer({ REJOIN_GRACE_MS: String(REJOIN_GRACE_MS) });
+  server = await startServer({
+    REJOIN_GRACE_MS: String(REJOIN_GRACE_MS),
+    GOING_AWAY_GRACE_MS: String(GOING_AWAY_GRACE_MS),
+  });
 });
 // server is unset if beforeAll failed: without ?. a TypeError would cover up the real error
 afterEach(() => server?.closeClients());
@@ -29,13 +36,16 @@ async function createRoom(): Promise<{ host: TestClient; roomId: string }> {
 }
 
 // Also takes the host's peer-joined, so the host's next message is whatever comes after it
-async function joinRoom(host: TestClient, roomId: string): Promise<{ phone: TestClient; peerId: string }> {
+async function joinRoom(
+  host: TestClient,
+  roomId: string,
+): Promise<{ phone: TestClient; peerId: string; sessionToken: string }> {
   const phone = await server.connect();
   phone.send({ type: 'join-room', roomId });
   const msg = await phone.next();
   if (msg.type !== 'joined') throw new Error(`Expected joined, got ${JSON.stringify(msg)}`);
   expect(await host.next()).toEqual({ type: 'peer-joined', peerId: msg.peerId });
-  return { phone, peerId: msg.peerId };
+  return { phone, peerId: msg.peerId, sessionToken: msg.sessionToken };
 }
 
 describe('rooms', () => {
@@ -75,12 +85,48 @@ describe('rooms', () => {
     expect(await phone.next()).toEqual({ type: 'error', message: 'Bereits in einem Raum' });
   });
 
-  it('tells the host when a phone leaves, once its slot was kept for the rejoin grace', async () => {
+  it('tells the host right away when a phone is away, and that it left once the rejoin grace is over', async () => {
     const { host, roomId } = await createRoom();
     const { phone, peerId } = await joinRoom(host, roomId);
     phone.close();
+    expect(await host.next()).toEqual({ type: 'peer-away', peerId, graceMs: REJOIN_GRACE_MS });
     expect(await host.collect(REJOIN_GRACE_MS / 2)).toEqual([]);
-    expect(await host.next()).toEqual({ type: 'peer-left', peerId });
+    expect(await host.next()).toEqual({ type: 'peer-left', peerId, reason: 'timeout' });
+  });
+
+  it('keeps the slot only briefly when the page was closed (1001): a reload is back by then', async () => {
+    const { host, roomId } = await createRoom();
+    const { phone, peerId } = await joinRoom(host, roomId);
+    phone.close(GOING_AWAY);
+    expect(await host.next()).toEqual({ type: 'peer-away', peerId, graceMs: GOING_AWAY_GRACE_MS });
+    // Well before the normal grace would be over
+    const [left] = await host.collect(GOING_AWAY_GRACE_MS + 150);
+    expect(left).toEqual({ type: 'peer-left', peerId, reason: 'left' });
+  });
+
+  it('frees the slot right away when a phone leaves on purpose', async () => {
+    const { host, roomId } = await createRoom();
+    const { phone, peerId, sessionToken } = await joinRoom(host, roomId);
+    phone.send({ type: 'leave-room' });
+    expect(await host.next()).toEqual({ type: 'peer-left', peerId, reason: 'left' });
+    // Nothing to keep the socket for: closed like after room-closed, and its close is no second leave
+    expect(await phone.closed).toBe(1000);
+    expect(await host.collect(REJOIN_GRACE_MS + 200)).toEqual([]);
+
+    const back = await server.connect();
+    back.send({ type: 'rejoin-room', roomId, sessionToken });
+    expect(await back.next()).toEqual({ type: 'error', message: 'Sitzung abgelaufen – bitte neu beitreten' });
+  });
+
+  it('lets only a phone in a room leave it', async () => {
+    const stranger = await server.connect();
+    stranger.send({ type: 'leave-room' });
+    expect(await stranger.next()).toEqual({ type: 'error', message: 'Nicht in einem Raum' });
+
+    // The host closes its page instead – leaving would end the room for every phone
+    const { host } = await createRoom();
+    host.send({ type: 'leave-room' });
+    expect(await host.next()).toEqual({ type: 'error', message: 'Nur Handys können den Raum verlassen' });
   });
 
   it('closes the room for every phone when the host leaves', async () => {
@@ -96,20 +142,11 @@ describe('rooms', () => {
 });
 
 describe('rejoining', () => {
-  // Joins and returns the session token from 'joined' as well
-  async function joinWithToken(host: TestClient, roomId: string): Promise<{ phone: TestClient; peerId: string; sessionToken: string }> {
-    const phone = await server.connect();
-    phone.send({ type: 'join-room', roomId });
-    const msg = await phone.next();
-    if (msg.type !== 'joined') throw new Error(`Expected joined, got ${JSON.stringify(msg)}`);
-    expect(await host.next()).toEqual({ type: 'peer-joined', peerId: msg.peerId });
-    return { phone, peerId: msg.peerId, sessionToken: msg.sessionToken };
-  }
-
   it('gives a phone that lost its socket its slot back with the session token', async () => {
     const { host, roomId } = await createRoom();
-    const { phone, peerId, sessionToken } = await joinWithToken(host, roomId);
+    const { phone, peerId, sessionToken } = await joinRoom(host, roomId);
     phone.close();
+    expect(await host.next()).toMatchObject({ type: 'peer-away', peerId });
 
     const back = await server.connect();
     back.send({ type: 'rejoin-room', roomId, sessionToken });
@@ -124,7 +161,7 @@ describe('rejoining', () => {
 
   it('hands the slot to the newer socket and drops the old one', async () => {
     const { host, roomId } = await createRoom();
-    const { phone, peerId, sessionToken } = await joinWithToken(host, roomId);
+    const { phone, peerId, sessionToken } = await joinRoom(host, roomId);
 
     const duplicate = await server.connect();
     duplicate.send({ type: 'rejoin-room', roomId, sessionToken });
@@ -138,14 +175,15 @@ describe('rejoining', () => {
 
   it('refuses a wrong token and a slot whose grace is over', async () => {
     const { host, roomId } = await createRoom();
-    const { phone, peerId, sessionToken } = await joinWithToken(host, roomId);
+    const { phone, peerId, sessionToken } = await joinRoom(host, roomId);
 
     const guesser = await server.connect();
     guesser.send({ type: 'rejoin-room', roomId, sessionToken: 'not-the-token' });
     expect(await guesser.next()).toEqual({ type: 'error', message: 'Sitzung abgelaufen – bitte neu beitreten' });
 
     phone.close();
-    expect(await host.next()).toEqual({ type: 'peer-left', peerId });
+    expect(await host.next()).toMatchObject({ type: 'peer-away', peerId });
+    expect(await host.next()).toEqual({ type: 'peer-left', peerId, reason: 'timeout' });
     const late = await server.connect();
     late.send({ type: 'rejoin-room', roomId, sessionToken });
     expect(await late.next()).toEqual({ type: 'error', message: 'Sitzung abgelaufen – bitte neu beitreten' });
