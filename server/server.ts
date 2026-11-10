@@ -27,10 +27,13 @@ const MAX_FAILED_JOINS = 5;
 // Phones per room, racers and spectators together: a script could otherwise send thousands, and the host browser
 // would set up a PeerConnection for each of them
 const MAX_CONTROLLERS_PER_ROOM = 16;
-// Messages per socket as a token bucket: up to MESSAGE_BURST at once, then MESSAGE_RATE per second. The burst is
-// for the host: when several phones join at once, it sends an answer and its ICE candidates to each of them.
+// Messages per socket as a token bucket: up to MESSAGE_BURST at once, then MESSAGE_RATE per second
 const MESSAGE_BURST = 100;
 const MESSAGE_RATE = 20;
+// On top for the host, per phone in its room: it sends each phone an answer and all its ICE candidates, on a PC with
+// several network adapters and TURN 8–15 of them. Several phones can need that at the same moment (joining, ICE
+// restart after a Wi-Fi dropout), and closing the host's socket would end the room for every phone.
+const MESSAGE_BURST_PER_PHONE = 40;
 // Close code for a client that breaks the rules (RFC 6455)
 const POLICY_VIOLATION = 1008;
 
@@ -43,6 +46,8 @@ const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
 interface Room {
   id: string;
   host: WebSocket;
+  // The host socket's limits: every phone that joins adds to its bucket
+  hostLimits: Limits;
   controllers: Map<PeerId, WebSocket>;
   nextPeerNumber: number;
 }
@@ -120,7 +125,7 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
     case 'create-room': {
       if (membership) return send(ws, { type: 'error', message: 'Bereits in einem Raum' });
       const turn = createTurnIceServer(HOST_ID);
-      const room: Room = { id: createRoomId(), host: ws, controllers: new Map(), nextPeerNumber: 1 };
+      const room: Room = { id: createRoomId(), host: ws, hostLimits: limits, controllers: new Map(), nextPeerNumber: 1 };
       rooms.set(room.id, room);
       memberships.set(ws, { room, peerId: HOST_ID });
       send(ws, { type: 'room-created', roomId: room.id, lanAddresses: IS_PRODUCTION ? undefined : lanAddresses(), iceServers: turn ? [turn] : undefined });
@@ -130,7 +135,7 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
 
     case 'join-room': {
       if (membership) return send(ws, { type: 'error', message: 'Bereits in einem Raum' });
-      const room = rooms.get(String(msg.roomId).trim().toUpperCase());
+      const room = rooms.get(msg.roomId.trim().toUpperCase());
       if (!room) {
         send(ws, { type: 'error', message: `Raum ${msg.roomId} nicht gefunden` });
         if (++limits.failedJoins >= MAX_FAILED_JOINS) {
@@ -144,6 +149,8 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
       const turn = createTurnIceServer(peerId);
       room.controllers.set(peerId, ws);
       memberships.set(ws, { room, peerId });
+      // Available right away, not only after the refill: the host answers the new phone now
+      room.hostLimits.tokens += MESSAGE_BURST_PER_PHONE;
       send(ws, { type: 'joined', roomId: room.id, peerId, iceServers: turn ? [turn] : undefined });
       send(room.host, { type: 'peer-joined', peerId });
       console.log(`[${room.id}] ${peerId} beigetreten`);
@@ -193,10 +200,18 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+// The host's bucket grows with its phones, see MESSAGE_BURST_PER_PHONE
+function messageBurst(ws: WebSocket): number {
+  const membership = memberships.get(ws);
+  if (membership?.peerId !== HOST_ID) return MESSAGE_BURST;
+  return MESSAGE_BURST + membership.room.controllers.size * MESSAGE_BURST_PER_PHONE;
+}
+
 // Refills the bucket for the time since the last message, then takes one token. false = bucket empty.
-function takeToken(limits: Limits): boolean {
-  const now = Date.now();
-  limits.tokens = Math.min(MESSAGE_BURST, limits.tokens + (now - limits.refilledAt) / 1000 * MESSAGE_RATE);
+// performance.now() instead of Date.now(): a clock set back (NTP) would take tokens instead of adding them.
+function takeToken(limits: Limits, burst: number): boolean {
+  const now = performance.now();
+  limits.tokens = Math.min(burst, limits.tokens + (now - limits.refilledAt) / 1000 * MESSAGE_RATE);
   limits.refilledAt = now;
   if (limits.tokens < 1) return false;
   limits.tokens--;
@@ -245,24 +260,32 @@ const wss = new WebSocketServer({
   verifyClient: ({ origin }: { origin: string }) => !IS_PRODUCTION || origin === ALLOWED_ORIGIN,
 });
 
+let listening = false;
 // Only once the port is really open. With PORT=0 the OS picks a free one (the tests do that), printed here.
 wss.on('listening', () => {
+  listening = true;
   const { port } = wss.address() as AddressInfo;
   console.log(`Signaling-Server läuft auf ws://${HOST}:${port}`);
 });
-// E.g. the port is taken. Without a listener, the error event would end the process with a bare stack trace.
+// Without a listener, the error event would end the process with a bare stack trace
 wss.on('error', (error) => {
+  // After the start, e.g. accepting a connection failed: ending the process would drop every room
+  if (listening) {
+    console.error(`Signaling-Server-Fehler: ${error.message}`);
+    return;
+  }
+  // E.g. the port is taken
   console.error(`Signaling-Server konnte nicht starten: ${error.message}`);
   process.exit(1);
 });
 
 wss.on('connection', (ws) => {
-  const limits: Limits = { failedJoins: 0, tokens: MESSAGE_BURST, refilledAt: Date.now() };
+  const limits: Limits = { failedJoins: 0, tokens: MESSAGE_BURST, refilledAt: performance.now() };
 
   ws.on('message', (raw) => {
     // Closed for breaking a limit: whatever the client still sends until the socket is gone is dropped
     if (ws.readyState !== WebSocket.OPEN) return;
-    if (!takeToken(limits)) {
+    if (!takeToken(limits, messageBurst(ws))) {
       ws.close(POLICY_VIOLATION, 'Zu viele Nachrichten');
       console.log('Verbindung wegen zu vieler Nachrichten geschlossen');
       return;

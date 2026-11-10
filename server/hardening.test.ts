@@ -1,3 +1,4 @@
+import { once } from 'node:events';
 import { connect as connectTcp } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { SignalData } from '../src/shared/protocol';
@@ -86,29 +87,39 @@ describe('transport', () => {
     // such a frame, so a raw TCP socket does.
     const { hostname, port } = new URL(server.url);
     const socket = connectTcp(Number(port), hostname);
-    await new Promise((resolve) => socket.once('connect', resolve));
-    socket.write([
-      'GET / HTTP/1.1',
-      `Host: ${hostname}:${port}`,
-      'Upgrade: websocket',
-      'Connection: Upgrade',
-      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
-      'Sec-WebSocket-Version: 13',
-      '',
-      '',
-    ].join('\r\n'));
-    const response = await new Promise<string>((resolve) => socket.once('data', (data: Buffer) => resolve(data.toString())));
-    expect(response).toMatch(/^HTTP\/1\.1 101/);
+    // The server may also answer the broken frame with a reset: no reason to fail, whether it survived is what counts.
+    // Without a listener, that error would be an uncaught exception.
+    socket.on('error', () => {});
+    try {
+      // Rejects if the connection fails
+      await once(socket, 'connect');
+      socket.write([
+        'GET / HTTP/1.1',
+        `Host: ${hostname}:${port}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+        'Sec-WebSocket-Version: 13',
+        '',
+        '',
+      ].join('\r\n'));
+      const response = await new Promise<string>((resolve) => socket.once('data', (data: Buffer) => resolve(data.toString())));
+      expect(response).toMatch(/^HTTP\/1\.1 101/);
 
-    // FIN + text frame, 2 bytes payload "hi", mask bit not set
-    socket.write(Buffer.from([0x81, 0x02, 0x68, 0x69]));
-    await new Promise((resolve) => socket.once('close', resolve));
+      // FIN + text frame, 2 bytes payload "hi", mask bit not set
+      socket.write(Buffer.from([0x81, 0x02, 0x68, 0x69]));
+      await new Promise((resolve) => socket.once('close', resolve));
+    } finally {
+      // closeClients() doesn't know this socket: without this, a failed expectation would leave it open
+      socket.destroy();
+    }
     await expectServerAlive();
   });
 });
 
 describe('limits', () => {
   const CANDIDATE: SignalData = { kind: 'candidate', candidate: { candidate: '' } };
+  const ANSWER: SignalData = { kind: 'description', description: { type: 'answer', sdp: 'v=0' } };
 
   async function joinRoom(host: TestClient, roomId: string): Promise<{ phone: TestClient; peerId: string }> {
     const phone = await server.connect();
@@ -154,7 +165,7 @@ describe('limits', () => {
     for (let i = 0; i < 90; i++) phone.send({ type: 'signal', to: 'host', data: CANDIDATE });
     expect(await host.collect(500)).toHaveLength(90);
 
-    // 2 s refill 40 tokens: 10 left + 40 = 50
+    // About 10 left after the burst. The 500 ms of collect and the 2 s wait refill 50: about 60 for the next 40.
     await new Promise((resolve) => setTimeout(resolve, 2000));
     for (let i = 0; i < 40; i++) phone.send({ type: 'signal', to: 'host', data: CANDIDATE });
     expect(await host.collect(300)).toHaveLength(40);
@@ -175,6 +186,32 @@ describe('limits', () => {
 
     other.phone.send({ type: 'signal', to: 'host', data: CANDIDATE });
     expect(await host.next()).toEqual({ type: 'signal', from: other.peerId, data: CANDIDATE });
+  });
+
+  // Like a Wi-Fi dropout where every phone restarts ICE at the same moment. The host's socket closing would end the
+  // room for all of them.
+  it('lets the host answer 16 phones at once, each with an answer and 15 ICE candidates', async () => {
+    const { host, roomId } = await createRoom();
+    const phones: { phone: TestClient; peerId: string }[] = [];
+    for (let i = 0; i < 16; i++) phones.push(await joinRoom(host, roomId));
+
+    for (const { peerId } of phones) {
+      host.send({ type: 'signal', to: peerId, data: ANSWER });
+      for (let i = 0; i < 15; i++) host.send({ type: 'signal', to: peerId, data: CANDIDATE });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    for (const { phone } of phones) expect(await phone.collect(0)).toHaveLength(16);
+    expect(await host.staysOpen()).toBe(true);
+  });
+
+  it('still closes a host that floods the server (1008)', async () => {
+    const { host, roomId } = await createRoom();
+    const { phone, peerId } = await joinRoom(host, roomId);
+
+    // Room for 100 + 40 for its one phone
+    for (let i = 0; i < 500; i++) host.send({ type: 'signal', to: peerId, data: CANDIDATE });
+    expect(await host.closed).toBe(1008);
+    expect((await phone.collect(300)).at(-1)).toEqual({ type: 'room-closed' });
   });
 });
 
