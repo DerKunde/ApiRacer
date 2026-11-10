@@ -111,6 +111,12 @@ export async function startServer(env: Record<string, string> = {}): Promise<Tes
   };
 }
 
+// A next() call that waits for a message
+interface Waiter {
+  deliver(msg: ServerMessage): void;
+  fail(error: Error): void;
+}
+
 export class TestClient {
   // Resolves with the close code once the socket is closed, by either side
   readonly closed: Promise<number>;
@@ -118,8 +124,9 @@ export class TestClient {
   // Arrived, but not taken by next() yet
   private readonly inbox: ServerMessage[] = [];
   // next() calls still waiting, oldest first: each message goes to the oldest
-  private readonly waiting: ((msg: ServerMessage) => void)[] = [];
-  // A socket error after the connection was open. Kept for next(), so the test that waits fails with it.
+  private readonly waiting: Waiter[] = [];
+  // Why no message can come anymore: a socket error after the connection was open, or the close. Kept for next(), so
+  // the test that waits fails with it right away instead of with a timeout.
   private error?: Error;
 
   private constructor(ws: WebSocket) {
@@ -127,14 +134,20 @@ export class TestClient {
     ws.on('message', (data: Buffer) => {
       const msg = JSON.parse(data.toString()) as ServerMessage;
       const waiting = this.waiting.shift();
-      if (waiting) waiting(msg);
+      if (waiting) waiting.deliver(msg);
       else this.inbox.push(msg);
     });
     // Without a listener, an error event would be an uncaught exception, blamed on no test in particular
-    ws.on('error', (error) => {
-      this.error = error;
-    });
+    ws.on('error', (error) => this.fail(error));
     this.closed = new Promise((resolve) => ws.once('close', (code: number) => resolve(code)));
+    // Messages always come before the close: what is still waiting then waits in vain
+    ws.once('close', (code: number) => this.fail(new Error(`Socket closed (${code}) while waiting for a message`)));
+  }
+
+  // The first reason is the one that explains the failure, the close after an error adds nothing
+  private fail(error: Error): void {
+    this.error ??= error;
+    for (const waiting of this.waiting.splice(0)) waiting.fail(this.error);
   }
 
   // Rejects when the server refuses the connection
@@ -162,16 +175,22 @@ export class TestClient {
     if (queued) return Promise.resolve(queued);
     if (this.error) return Promise.reject(this.error);
     return new Promise((resolve, reject) => {
-      const deliver = (msg: ServerMessage): void => {
-        clearTimeout(timer);
-        resolve(msg);
+      const waiter: Waiter = {
+        deliver: (msg) => {
+          clearTimeout(timer);
+          resolve(msg);
+        },
+        fail: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
       };
       const timer = setTimeout(() => {
         // Only its own place: a next() called later keeps waiting
-        this.waiting.splice(this.waiting.indexOf(deliver), 1);
-        reject(this.error ?? new Error(`No message within ${MESSAGE_TIMEOUT_MS} ms`));
+        this.waiting.splice(this.waiting.indexOf(waiter), 1);
+        reject(new Error(`No message within ${MESSAGE_TIMEOUT_MS} ms`));
       }, MESSAGE_TIMEOUT_MS);
-      this.waiting.push(deliver);
+      this.waiting.push(waiter);
     });
   }
 

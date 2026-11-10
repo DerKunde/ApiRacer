@@ -4,6 +4,15 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { HOST_ID, type ClientMessage, type IceServer, type PeerId, type ServerMessage, type SignalData } from '../src/shared/protocol';
 import { createHmac } from 'node:crypto';
 
+// ws 8.22 (package.json asks for at least that) has this option, @types/ws 8.18 doesn't know it yet
+declare module 'ws' {
+  namespace WebSocket {
+    interface ServerOptions {
+      closeTimeout?: number;
+    }
+  }
+}
+
 /**
  * Signaling server: only brokers the connection setup (offer/answer/ICE).
  * Once the WebRTC connection is up, no game traffic goes through here anymore.
@@ -41,6 +50,9 @@ const MAX_CONNECTIONS = 500;
 // Time a socket has to create or join a room. The pages send that right after connecting. Without it a socket that
 // never joins, or stays after a wrong code (the join form opens a new one for the next code), would stay open forever.
 const JOIN_TIMEOUT_MS = 10_000;
+// Time a closed socket has to answer the close frame, then the server drops it. ws waits 30 s by default: a script
+// that never answers would keep its room and its place under MAX_CONNECTIONS that long. A real browser answers at once.
+const CLOSE_TIMEOUT_MS = 2000;
 // Close codes (RFC 6455): done, nothing wrong / a client that breaks the rules
 const NORMAL_CLOSURE = 1000;
 const POLICY_VIOLATION = 1008;
@@ -126,6 +138,16 @@ function lanAddresses(): string[] {
     .map((iface) => iface.address);
 }
 
+// Every join that doesn't get the socket into a room counts as a wrong code. Also "Raum voll": otherwise it would
+// confirm that a code exists without using up the guesses.
+function failJoin(ws: WebSocket, limits: Limits, message: string): void {
+  send(ws, { type: 'error', message });
+  if (++limits.failedJoins >= MAX_FAILED_JOINS) {
+    ws.close(POLICY_VIOLATION, 'Zu viele falsche Raumcodes');
+    console.log(`Verbindung nach ${MAX_FAILED_JOINS} falschen Raumcodes geschlossen`);
+  }
+}
+
 function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void {
   const membership = memberships.get(ws);
 
@@ -144,21 +166,16 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
     case 'join-room': {
       if (membership) return send(ws, { type: 'error', message: 'Bereits in einem Raum' });
       const room = rooms.get(msg.roomId.trim().toUpperCase());
-      if (!room) {
-        send(ws, { type: 'error', message: `Raum ${msg.roomId} nicht gefunden` });
-        if (++limits.failedJoins >= MAX_FAILED_JOINS) {
-          ws.close(POLICY_VIOLATION, 'Zu viele falsche Raumcodes');
-          console.log(`Verbindung nach ${MAX_FAILED_JOINS} falschen Raumcodes geschlossen`);
-        }
-        return;
-      }
-      if (room.controllers.size >= MAX_CONTROLLERS_PER_ROOM) return send(ws, { type: 'error', message: 'Raum voll' });
+      if (!room) return failJoin(ws, limits, `Raum ${msg.roomId} nicht gefunden`);
+      if (room.controllers.size >= MAX_CONTROLLERS_PER_ROOM) return failJoin(ws, limits, 'Raum voll');
       const peerId = `p${room.nextPeerNumber++}`;
       const turn = createTurnIceServer(peerId);
+      const hostBurstBefore = messageBurst(room.host);
       room.controllers.set(peerId, ws);
       memberships.set(ws, { room, peerId });
-      // Available right away, not only after the refill: the host answers the new phone now
-      room.hostLimits.tokens += MESSAGE_BURST_PER_PHONE;
+      // What the host's bucket grew by is available right away, not only after the refill: the host answers the new
+      // phone now. messageBurst stays the one place that says how much that is.
+      room.hostLimits.tokens += messageBurst(room.host) - hostBurstBefore;
       send(ws, { type: 'joined', roomId: room.id, peerId, iceServers: turn ? [turn] : undefined });
       send(room.host, { type: 'peer-joined', peerId });
       console.log(`[${room.id}] ${peerId} beigetreten`);
@@ -272,6 +289,9 @@ const wss = new WebSocketServer({
   host: HOST,
   port: PORT,
   maxPayload: 64 * 1024,
+  closeTimeout: CLOSE_TIMEOUT_MS,
+  // accept() is called right away, so ws counts the socket in wss.clients in the same step: handshakes running in
+  // parallel can't all slip past the check before one of them is counted
   verifyClient: ({ origin }: { origin: string }, accept: (result: boolean, code?: number, message?: string) => void) => {
     if (IS_PRODUCTION && origin !== ALLOWED_ORIGIN) return accept(false, 401);
     // 503: the page shows "Signaling-Server nicht erreichbar" instead of waiting for an answer that never comes

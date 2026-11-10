@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { connect as connectTcp } from 'node:net';
+import { connect as connectTcp, type Socket } from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { SignalData } from '../src/shared/protocol';
 import { startServer, type TestClient, type TestServer } from './testServer';
@@ -85,39 +85,64 @@ describe('transport', () => {
   });
 
   it('survives an invalid WebSocket frame', async () => {
-    // Handshake by hand, then a frame without the mask every client frame must have. The ws library can't send
-    // such a frame, so a raw TCP socket does.
-    const { hostname, port } = new URL(server.url);
-    const socket = connectTcp(Number(port), hostname);
-    // The server may also answer the broken frame with a reset: no reason to fail, whether it survived is what counts.
-    // Without a listener, that error would be an uncaught exception.
-    socket.on('error', () => {});
-    try {
-      // Rejects if the connection fails
-      await once(socket, 'connect');
-      socket.write([
-        'GET / HTTP/1.1',
-        `Host: ${hostname}:${port}`,
-        'Upgrade: websocket',
-        'Connection: Upgrade',
-        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
-        'Sec-WebSocket-Version: 13',
-        '',
-        '',
-      ].join('\r\n'));
-      const response = await new Promise<string>((resolve) => socket.once('data', (data: Buffer) => resolve(data.toString())));
-      expect(response).toMatch(/^HTTP\/1\.1 101/);
-
+    // A frame without the mask every client frame must have. The ws library can't send such a frame.
+    await withRawSocket(async (socket) => {
       // FIN + text frame, 2 bytes payload "hi", mask bit not set
       socket.write(Buffer.from([0x81, 0x02, 0x68, 0x69]));
       await new Promise((resolve) => socket.once('close', resolve));
-    } finally {
-      // closeClients() doesn't know this socket: without this, a failed expectation would leave it open
-      socket.destroy();
-    }
+    });
     await expectServerAlive();
   });
+
+  it('drops a socket that never answers the close frame after 2 s', { timeout: 10000 }, async () => {
+    // A browser answers the close frame at once and the ws library does too, so a raw TCP socket plays the script
+    // that doesn't. 5 wrong codes get it closed (1008).
+    await withRawSocket(async (socket) => {
+      const closed = new Promise((resolve) => socket.once('close', resolve));
+      const start = performance.now();
+      for (let i = 0; i < 5; i++) socket.write(maskedTextFrame(JSON.stringify({ type: 'join-room', roomId: 'ZZZZ' })));
+      await closed;
+      // Without the server's closeTimeout it would be 10 s (the join timeout closes it the same way, then waits too)
+      // or 30 s (ws' default)
+      expect(performance.now() - start).toBeLessThan(4000);
+    });
+  });
 });
+
+// Handshake by hand on a raw TCP socket, for frames the ws library can't send or behaviour it doesn't have
+async function withRawSocket(use: (socket: Socket) => Promise<void>): Promise<void> {
+  const { hostname, port } = new URL(server.url);
+  const socket = connectTcp(Number(port), hostname);
+  // The server may also answer with a reset: no reason to fail, the test checks what counts.
+  // Without a listener, that error would be an uncaught exception.
+  socket.on('error', () => {});
+  try {
+    // Rejects if the connection fails
+    await once(socket, 'connect');
+    socket.write([
+      'GET / HTTP/1.1',
+      `Host: ${hostname}:${port}`,
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+      'Sec-WebSocket-Version: 13',
+      '',
+      '',
+    ].join('\r\n'));
+    const response = await new Promise<string>((resolve) => socket.once('data', (data: Buffer) => resolve(data.toString())));
+    expect(response).toMatch(/^HTTP\/1\.1 101/);
+    await use(socket);
+  } finally {
+    // closeClients() doesn't know this socket: without this, a failed expectation would leave it open
+    socket.destroy();
+  }
+}
+
+// FIN + text frame with the mask bit set. Mask key 0: XOR with 0 leaves the payload as it is. Up to 125 bytes.
+function maskedTextFrame(text: string): Buffer {
+  const payload = Buffer.from(text);
+  return Buffer.concat([Buffer.from([0x81, 0x80 | payload.length, 0, 0, 0, 0]), payload]);
+}
 
 describe('limits', () => {
   const CANDIDATE: SignalData = { kind: 'candidate', candidate: { candidate: '' } };
@@ -158,6 +183,19 @@ describe('limits', () => {
     const replacement = await server.connect();
     replacement.send({ type: 'join-room', roomId });
     expect(await replacement.next()).toMatchObject({ type: 'joined' });
+  });
+
+  it('counts "Raum voll" as a wrong code: it would confirm the code exists', async () => {
+    const { host, roomId } = await createRoom();
+    for (let i = 0; i < 16; i++) await joinRoom(host, roomId);
+
+    const guesser = await server.connect();
+    for (let i = 0; i < 4; i++) {
+      guesser.send({ type: 'join-room', roomId });
+      expect(await guesser.next()).toEqual({ type: 'error', message: 'Raum voll' });
+    }
+    guesser.send({ type: 'join-room', roomId: 'ZZZZ' });
+    expect(await guesser.closed).toBe(1008);
   });
 
   it('relays a burst of 90 messages, and more after the bucket refilled', { timeout: 10000 }, async () => {
@@ -263,6 +301,14 @@ describe('connection limit', () => {
     // The server's close event comes a moment after the client's
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(await (await crowded.connect()).staysOpen()).toBe(true);
+  });
+
+  it('takes no more than 500 when the handshakes run in parallel', async () => {
+    const results = await Promise.allSettled(Array.from({ length: 550 }, () => crowded.connect()));
+    const refused = results.filter((result) => result.status === 'rejected');
+    // At most: the previous test's sockets may not all be gone yet
+    expect(results.length - refused.length).toBeLessThanOrEqual(500);
+    for (const result of refused) expect(String(result.reason)).toMatch(/503/);
   });
 });
 
