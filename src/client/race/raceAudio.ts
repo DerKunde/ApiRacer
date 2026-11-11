@@ -183,14 +183,13 @@ export class EngineSound {
         // A suspended context has a frozen clock: every call would pile up one more event per value at the same time
         if (this.context.state !== 'running') return;
 
-        const speedShare = Math.min(Math.abs(speed) / TOP_SPEED, 1);
-        const frequency = (IDLE_FREQUENCY + (TOP_FREQUENCY - IDLE_FREQUENCY) * speedShare) * this.pitch;
+        const targets = engineTargets(speed, throttle, pan, this.pitch);
         const now = this.context.currentTime;
-        this.main.frequency.setTargetAtTime(frequency, now, SMOOTHING);
-        this.sub.frequency.setTargetAtTime(frequency / 2, now, SMOOTHING);
-        this.filter.frequency.setTargetAtTime(frequency * CUTOFF_PER_PITCH + throttle * CUTOFF_THROTTLE, now, SMOOTHING);
-        this.volume.gain.setTargetAtTime(IDLE_VOLUME + speedShare * SPEED_VOLUME + throttle * THROTTLE_VOLUME, now, SMOOTHING);
-        this.panner.pan.setTargetAtTime(pan, now, SMOOTHING);
+        this.main.frequency.setTargetAtTime(targets.frequency, now, SMOOTHING);
+        this.sub.frequency.setTargetAtTime(targets.frequency / 2, now, SMOOTHING);
+        this.filter.frequency.setTargetAtTime(targets.cutoff, now, SMOOTHING);
+        this.volume.gain.setTargetAtTime(targets.gain, now, SMOOTHING);
+        this.panner.pan.setTargetAtTime(targets.pan, now, SMOOTHING);
     }
 
     // Use RaceAudio.removeEngine, which also keeps the mix volume right
@@ -202,6 +201,37 @@ export class EngineSound {
         // Nothing plays anymore → disconnected, the nodes can be garbage collected
         this.main.addEventListener('ended', () => this.panner.disconnect());
     }
+}
+
+export interface EngineTargets {
+    // Of the sawtooth, in Hz; the square wave plays half of it
+    frequency: number;
+    // Of the low pass, in Hz
+    cutoff: number;
+    gain: number;
+    pan: number;
+}
+
+// What EngineSound.update sets, as numbers only: testable without Web Audio. Arguments as in update, pitch see
+// SLOT_PITCH. Every input is clamped first (see clamp) – the throttle comes unchecked from a phone.
+export function engineTargets(speed: number, throttle: number, pan: number, pitch: number): EngineTargets {
+    const speedShare = clamp(Math.abs(speed) / TOP_SPEED, 0, 1);
+    const throttleShare = clamp(throttle, 0, 1);
+    const frequency = (IDLE_FREQUENCY + (TOP_FREQUENCY - IDLE_FREQUENCY) * speedShare) * pitch;
+    return {
+        frequency,
+        cutoff: frequency * CUTOFF_PER_PITCH + throttleShare * CUTOFF_THROTTLE,
+        gain: IDLE_VOLUME + speedShare * SPEED_VOLUME + throttleShare * THROTTLE_VOLUME,
+        pan: clamp(pan, -1, 1),
+    };
+}
+
+// AudioParam methods throw on NaN and ±Infinity, and EngineSound.update runs in the render loop before anything is
+// drawn: one broken value would freeze the picture for everyone. Infinity ends up at min or max, NaN (also from a
+// value that isn't a number at all) at 0 – min ≤ 0 ≤ max.
+function clamp(value: number, min: number, max: number): number {
+    const clamped = Math.min(Math.max(value, min), max);
+    return Number.isNaN(clamped) ? 0 : clamped;
 }
 
 // tanh: nearly linear for quiet input, rounds off the peaks of loud input. Normalized so ±1 stays ±1.
