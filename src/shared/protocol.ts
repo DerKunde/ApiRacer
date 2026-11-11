@@ -98,8 +98,9 @@ export type ChannelMessage =
   // ready: phone → PC, toggled by the ready button. seq numbers the phone's requests, so it can tell which one an
   //   answer belongs to.
   // ready-state: PC → phone, what the host has recorded – the phone shows this, not its own guess. Answers every
-  //   'ready' with its seq, also one the host ignored (spectator). Without seq when the host changes it on its own,
-  //   and once the channel is open.
+  //   'ready' with its seq, also one the host ignored (spectator). Without seq when the host changes it on its own
+  //   (made a spectator, or the phone was interrupted in the lobby – it has to confirm again), and once the channel
+  //   is open.
   // role: PC → phone, once the channel is open and whenever it changes. racer: false = spectator, no car.
   // race-start: PC → all phones when the host starts the race, and to every phone whose channel opens after that.
   | { type: 'ready'; ready: boolean; seq: number }

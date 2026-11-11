@@ -244,9 +244,6 @@ function giveUp(message: string): void {
   // session back. Joining again reloads the page with a new connection anyway.
   signaling.close();
   closeConnection();
-  // No connection left to send it again on
-  clearReadyRequest();
-  updateReadyButton();
   helloButton.disabled = true;
   showJoinScreen(message);
 }
@@ -447,12 +444,7 @@ function startConnection(newConnection: boolean): void {
   reliableChannel.onopen = () => {
     log('Zuverlässiger DataChannel offen');
     reliableOpen = true;
-    // The host starts every new connection as not ready: ask again for what it had confirmed, or for what was still
-    // on its way when the old connection broke
-    const wanted = readyRequest ? readyRequest.ready : ready;
-    clearReadyRequest();
-    if (wanted) sendReady(true);
-    else updateReadyButton();
+    updateReadyButton();
   };
   reliableChannel.onclose = () => {
     log('Zuverlässiger DataChannel geschlossen');
@@ -664,6 +656,8 @@ function sendReady(value: boolean): void {
 
 // The host's answer to a request (with seq), or a change it made on its own (without)
 function handleReadyState(msg: { ready: boolean; seq?: number }): void {
+  // Taken back by the host on its own, e.g. after an interruption: the button asks for "Bereit" again as usual
+  if (msg.seq === undefined && ready && !msg.ready) log('Host hat „Bereit“ zurückgenommen');
   ready = msg.ready;
   // The answer to an older request – sent again after a timeout – doesn't end the wait for the newer one
   if (readyRequest && msg.seq !== undefined && msg.seq >= readyRequest.seq) clearReadyRequest();
@@ -677,12 +671,12 @@ function clearReadyRequest(): void {
 }
 
 /**
- * No answer can come on this channel anymore. A request still on its way stays: the next connection's reliable
- * channel sends it again (reliableChannel.onopen), the button shows it as on its way until then.
+ * No answer can come on this channel anymore. Nothing is sent again on the next one: the host takes the ready state
+ * back after an interruption, the player confirms it again.
  */
 function handleReliableChannelGone(): void {
   reliableOpen = false;
-  window.clearTimeout(readyTimer);
+  clearReadyRequest();
   updateReadyButton();
 }
 

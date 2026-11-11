@@ -84,8 +84,9 @@ interface Peer {
   awayUntil?: number;
   awayTimer?: number;
   overlay: ConnectionOverlay;
-  // Whether the overlay was shown at the last render: once it goes away, the card flashes – the player is back
-  overlayShown: boolean;
+  // The phone can't drive right now (updateInterrupted). The overlay shows it, and in the lobby it takes back the
+  // ready state: ready means "I'm here", so after an interruption the player confirms it again.
+  interrupted: boolean;
   inputSeq: number;
   steerValue?: number;
   throttle?: number;
@@ -142,7 +143,7 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'peer-rejoined': {
       // Same player as before – its connection is restored by the phone (ICE restart or a new connection)
       const peer = peers.get(msg.peerId);
-      // The overlay stays until the WebRTC connection works again (renderOverlay)
+      // Stays interrupted until its inputs arrive again (updateInterrupted)
       if (peer) setAway(peer, undefined);
       log(`[${msg.peerId}] ✅ wieder da`);
       break;
@@ -200,7 +201,7 @@ function createPeer(id: PeerId, pc?: RTCPeerConnection): Peer {
   const peer: Peer = {
     id, pc, card, actions, spectateButton, color, racer, ready: false,
     enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), inputSeq: 0,
-    overlay, overlayShown: false,
+    overlay, interrupted: false,
   };
   spectateButton.addEventListener('click', () => makeSpectator(peer));
   peers.set(id, peer);
@@ -231,8 +232,10 @@ function replaceConnection(peer: Peer): RTCPeerConnection {
   peer.inputSeq = 0;
   peer.rttMs = undefined;
   peer.path = undefined;
-  // A reloaded phone isn't ready anymore – a phone that still is says so again on the new channel
-  if (peer.ready) setReady(peer, false);
+  // The old connection is gone: interrupted until the first input arrives over the new one
+  window.clearTimeout(peer.inputTimeout);
+  peer.inputsStopped = true;
+  setInterrupted(peer, true);
   setupConnection(peer, pc);
   renderPeer(peer);
   log(`[${peer.id}] neue Verbindung`);
@@ -248,6 +251,7 @@ function setupConnection(peer: Peer, pc: RTCPeerConnection): void {
   };
   pc.onconnectionstatechange = () => {
     log(`[${id}] Verbindungsstatus: ${pc.connectionState}`);
+    updateInterrupted(peer);
     renderPeer(peer);
   };
   // The phone creates the DataChannel, the PC receives it here
@@ -301,11 +305,15 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
       case 'input':
         // Before the seq check: a late message still proves the phone is there
         window.clearTimeout(peer.inputTimeout);
-        peer.inputsStopped = false;
         peer.inputTimeout = window.setTimeout(() => {
           peer.inputsStopped = true;
+          updateInterrupted(peer);
           applyInput(peer, NEUTRAL_INPUT);
         }, INPUT_TIMEOUT_MS);
+        if (peer.inputsStopped) {
+          peer.inputsStopped = false;
+          updateInterrupted(peer);
+        }
         if (msg.seq > peer.inputSeq) {
           peer.inputSeq = msg.seq;
           applyInput(peer, { steering: msg.steering, throttle: msg.throttle, brake: msg.brake });
@@ -474,46 +482,69 @@ function setAway(peer: Peer, graceMs: number | undefined): void {
     void bar.offsetWidth;
     bar.style.animation = `countdown ${graceMs}ms linear forwards`;
   }
+  updateInterrupted(peer);
   renderPeer(peer);
 }
 
 /**
- * Shown while the phone can't drive: away from the server and silent on WebRTC too, or the WebRTC connection broke
- * and the phone is restoring it. Only the server gone while the inputs still arrive needs no overlay: the car still
- * drives – the header says it.
+ * Recomputes peer.interrupted after every change it depends on: connection state, inputs stopped or arriving again,
+ * away from the server. Interrupted = away from the server and silent on WebRTC too, or the WebRTC connection broke
+ * and the phone is restoring it. Only the server gone while the inputs still arrive doesn't count: the car still
+ * drives. Once interrupted, the phone is only back when its inputs arrive again – e.g. after a rejoin, it may still
+ * be setting up a new connection (replaceConnection).
  */
+function updateInterrupted(peer: Peer): void {
+  const connection = peer.pc?.connectionState;
+  const silentAway = peer.awayUntil !== undefined && (connection !== 'connected' || peer.inputsStopped === true);
+  const broken = connection === 'disconnected' || connection === 'failed';
+  const stillSilent = peer.interrupted && peer.inputsStopped === true;
+  setInterrupted(peer, silentAway || broken || stillSilent);
+}
+
+function setInterrupted(peer: Peer, interrupted: boolean): void {
+  if (interrupted === peer.interrupted) return;
+  peer.interrupted = interrupted;
+  if (interrupted) {
+    // Lobby only: once the race runs, the ready state doesn't count anymore
+    if (peer.ready && phase === 'lobby') {
+      log(`[${peer.id}] Verbindung unterbrochen – muss sich erneut bereit melden`);
+      setReady(peer, false);
+      // A broken path: the reliable channel delivers it once the path works again. A replaced connection: its new
+      // channel sends the ready state when it opens (setupReliableChannel).
+      sendMessage(peer.reliableChannel, { type: 'ready-state', ready: false });
+    }
+  } else {
+    // Back again: the card flashes, so the change is noticed
+    flashCard(peer);
+  }
+  renderPeer(peer);
+}
+
+/** Covers the card while the phone is interrupted, and tells why. */
 function renderOverlay(peer: Peer): void {
   const { overlay } = peer;
   const connection = peer.pc?.connectionState;
-  const away = peer.awayUntil !== undefined && (connection !== 'connected' || peer.inputsStopped === true);
-  const interrupted = connection === 'disconnected' || connection === 'failed';
-  // A new connection replacing a broken one (reloaded page): still not back until it's connected
-  const replacing = peer.overlayShown && (connection === 'new' || connection === 'connecting');
-  const shown = away || interrupted || replacing;
-
-  overlay.root.hidden = !shown;
+  const away = peer.interrupted && peer.awayUntil !== undefined;
+  overlay.root.hidden = !peer.interrupted;
   overlay.countdownBar.hidden = !away;
   if (away) {
     const seconds = Math.max(0, Math.ceil((peer.awayUntil! - performance.now()) / 1000));
     overlay.title.textContent = '⚠️ Verbindung verloren';
     overlay.detail.textContent = `Platz bleibt noch ${seconds} s reserviert`;
-  } else if (interrupted) {
+  } else if (connection === 'disconnected' || connection === 'failed') {
     overlay.title.textContent = '⚠️ Verbindung unterbrochen';
     overlay.detail.textContent = 'Das Handy stellt sie wieder her …';
-  } else if (replacing) {
+  } else if (peer.interrupted) {
     overlay.title.textContent = '⚠️ Verbindung unterbrochen';
-    overlay.detail.textContent = 'Neue Verbindung wird aufgebaut …';
+    overlay.detail.textContent = connection === 'connected' ? 'Warte auf das Handy …' : 'Neue Verbindung wird aufgebaut …';
   }
-  // Back again: the overlay goes away with a flash, so the change is noticed
-  if (peer.overlayShown && !shown) flashCard(peer);
-  peer.overlayShown = shown;
 }
 
 function stateText(peer: Peer): string {
   if (!peer.pc) return 'Test-Spieler';
   const text = CONNECTION_STATE_TEXT[peer.pc.connectionState];
   // Only the server connection is gone (e.g. server restart): the car still drives, no overlay
-  return peer.awayUntil !== undefined && peer.overlay.root.hidden ? `${text} · ohne Server` : text;
+  return peer.awayUntil !== undefined && !peer.interrupted ? `${text} · ohne Server` : text;
 }
 
 function renderPeer(peer: Peer): void {
