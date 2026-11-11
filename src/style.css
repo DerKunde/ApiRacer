@@ -496,15 +496,18 @@ body[data-mode='race'] .debug-panel.open {
   transform: translateY(-2px);
 }
 
-/* Landing page: racing game is work in progress → muted, dashed borders, no hover lift. Still clickable. */
-.landing-wip h2 {
-  margin: 0 0 4px;
-  font-size: 1.1rem;
-  color: var(--muted);
+/* Landing page: a group of buttons with a heading and one line about it */
+.landing-section {
+  margin: 0;
 }
 
-/* Explains what the race part currently shows; narrower than the page so the centered lines stay readable */
-.landing-wip-sub {
+.landing-section h2 {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+}
+
+/* Narrower than the page so the centered lines stay readable */
+.landing-sub {
   max-width: 60ch;
   margin: 0 auto 12px;
   color: var(--muted);
@@ -513,13 +516,18 @@ body[data-mode='race'] .debug-panel.open {
   text-wrap: pretty;
 }
 
-.landing-wip .landing-button {
+/* Secondary section (3D demo below the race): muted, dashed borders, no hover lift. Still clickable. */
+.landing-secondary h2 {
+  color: var(--muted);
+}
+
+.landing-secondary .landing-button {
   opacity: 0.6;
   border-style: dashed;
 }
 
-.landing-wip .landing-button:hover,
-.landing-wip .landing-button:focus-visible {
+.landing-secondary .landing-button:hover,
+.landing-secondary .landing-button:focus-visible {
   opacity: 1;
   transform: none;
 }
