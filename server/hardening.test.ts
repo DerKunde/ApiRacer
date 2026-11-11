@@ -13,7 +13,8 @@ const INVALID = { type: 'error', message: 'Ungültige Nachricht' };
 let server: TestServer;
 
 beforeAll(async () => {
-  server = await startServer();
+  // A short rejoin grace: 'peer-left' comes 100 ms after a phone's socket closed instead of 15 s
+  server = await startServer({ REJOIN_GRACE_MS: '100' });
 });
 // server is unset if beforeAll failed: without ?. a TypeError would cover up the real error
 afterEach(() => server?.closeClients());
@@ -179,6 +180,7 @@ describe('limits', () => {
     expect(await extra.next()).toEqual({ type: 'error', message: 'Raum voll' });
 
     phones[0].close();
+    expect(await host.next()).toMatchObject({ type: 'peer-away' });
     expect(await host.next()).toMatchObject({ type: 'peer-left' });
     const replacement = await server.connect();
     replacement.send({ type: 'join-room', roomId });
@@ -222,7 +224,7 @@ describe('limits', () => {
     const atHost = await host.collect(300);
     // The burst got through (plus the little that refilled while the server worked through it), then the leave
     expect(atHost.filter((msg) => msg.type === 'signal').length).toBeLessThan(150);
-    expect(atHost.at(-1)).toEqual({ type: 'peer-left', peerId: flooder.peerId });
+    expect(atHost.at(-1)).toEqual({ type: 'peer-left', peerId: flooder.peerId, reason: 'timeout' });
 
     other.phone.send({ type: 'signal', to: 'host', data: CANDIDATE });
     expect(await host.next()).toEqual({ type: 'signal', from: other.peerId, data: CANDIDATE });

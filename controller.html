@@ -37,6 +37,8 @@
             <button type="button" id="ready-btn" class="big ready-btn" aria-pressed="false" disabled hidden>Bereit</button>
             <p class="status" id="status">…</p>
             <button type="button" id="debug-open-btn" class="debug-btn" aria-controls="debug-panel" aria-expanded="false">Debug</button>
+            <!-- Frees the slot right away – closing the tab only does that after a short grace (leaveRoom in controller.ts) -->
+            <button type="button" id="leave-btn" class="debug-btn">Raum verlassen</button>
           </div>
           <button type="button" id="gas-btn" class="pedal pedal-gas">Gas</button>
         </div>

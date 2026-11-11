@@ -23,12 +23,20 @@ const MAX_OUTPUT_CHARS = 20000;
 const LISTENING = /Signaling-Server läuft auf ws:\/\/[\d.]+:(\d+)/;
 // From the developer's shell, they would change how the server behaves on one machine but not on another.
 // Tests that need one pass it to startServer.
-const SERVER_ENV_KEYS = ['NODE_ENV', 'TURN_URLS', 'TURN_SECRET'];
+const SERVER_ENV_KEYS = [
+  'NODE_ENV',
+  'TURN_URLS',
+  'TURN_SECRET',
+  'REJOIN_GRACE_MS',
+  'GOING_AWAY_GRACE_MS',
+  'HEARTBEAT_INTERVAL_MS',
+];
 
 export interface TestServer {
   url: string;
   // Opens a socket like a browser page. origin: the Origin header the browser would send, none if left out.
-  connect(origin?: string): Promise<TestClient>;
+  // autoPong: false = never answers the server's pings, like a connection that died without a close
+  connect(origin?: string, autoPong?: boolean): Promise<TestClient>;
   // For afterEach: every test starts without the sockets of the previous one
   closeClients(): void;
   stop(): Promise<void>;
@@ -93,8 +101,8 @@ export async function startServer(env: Record<string, string> = {}): Promise<Tes
   const clients = new Set<TestClient>();
   return {
     url,
-    async connect(origin) {
-      const client = await TestClient.connect(url, origin);
+    async connect(origin, autoPong) {
+      const client = await TestClient.connect(url, origin, autoPong);
       clients.add(client);
       return client;
     },
@@ -151,8 +159,8 @@ export class TestClient {
   }
 
   // Rejects when the server refuses the connection
-  static async connect(url: string, origin?: string): Promise<TestClient> {
-    const ws = new WebSocket(url, { origin });
+  static async connect(url: string, origin?: string, autoPong = true): Promise<TestClient> {
+    const ws = new WebSocket(url, { origin, autoPong });
     await once(ws, 'open');
     return new TestClient(ws);
   }
@@ -200,7 +208,8 @@ export class TestClient {
     return this.inbox.splice(0);
   }
 
-  close(): void {
-    this.ws.close();
+  // code: e.g. 1001 like a browser whose page is closed or reloaded; none = like a dropped connection
+  close(code?: number): void {
+    this.ws.close(code);
   }
 }

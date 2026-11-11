@@ -30,6 +30,24 @@ const GO_MESSAGE_MS = 1000;
 // or the car keeps driving with the last input until the DataChannel finally closes.
 const INPUT_TIMEOUT_MS = 500;
 const NEUTRAL_INPUT: DriverInput = { steering: 0, throttle: 0, brake: 0 };
+// Header of the peer card: the WebRTC connection state. When it breaks, the overlay over the card explains more.
+const CONNECTION_STATE_TEXT: Record<RTCPeerConnectionState, string> = {
+  new: 'verbindet …',
+  connecting: 'verbindet …',
+  connected: 'verbunden',
+  disconnected: 'unterbrochen',
+  failed: 'fehlgeschlagen',
+  closed: 'getrennt',
+};
+
+/** Covers a peer card while its connection is broken (renderOverlay). */
+interface ConnectionOverlay {
+  root: HTMLElement;
+  title: HTMLElement;
+  detail: HTMLElement;
+  // Shrinks until the slot is freed – only while the phone is away from the server (setAway)
+  countdownBar: HTMLElement;
+}
 
 // lobby: cars may drive around freely · countdown: cars stand on the grid · race: running
 type RacePhase = 'lobby' | 'countdown' | 'race';
@@ -58,6 +76,16 @@ interface Peer {
   pingTimer?: number;
   // Restarted with every input message, fires only once they stop (INPUT_TIMEOUT_MS)
   inputTimeout?: number;
+  // The inputs stopped (inputTimeout fired): the phone isn't sending anymore, even if the WebRTC connection still
+  // says 'connected' – it only notices a dead path after a few seconds
+  inputsStopped?: boolean;
+  // Lost its server connection ('peer-away'): its slot is kept until then (performance.now() time), the overlay counts
+  // down. undefined = not away.
+  awayUntil?: number;
+  awayTimer?: number;
+  overlay: ConnectionOverlay;
+  // Whether the overlay was shown at the last render: once it goes away, the card flashes – the player is back
+  overlayShown: boolean;
   inputSeq: number;
   steerValue?: number;
   throttle?: number;
@@ -105,14 +133,29 @@ function handleServerMessage(msg: ServerMessage): void {
     case 'peer-joined':
       addPeer(msg.peerId);
       break;
+    case 'peer-away': {
+      const peer = peers.get(msg.peerId);
+      if (peer) setAway(peer, msg.graceMs);
+      log(`[${msg.peerId}] Verbindung verloren – Platz bleibt ${Math.round(msg.graceMs / 1000)} s reserviert`);
+      break;
+    }
+    case 'peer-rejoined': {
+      // Same player as before – its connection is restored by the phone (ICE restart or a new connection)
+      const peer = peers.get(msg.peerId);
+      // The overlay stays until the WebRTC connection works again (renderOverlay)
+      if (peer) setAway(peer, undefined);
+      log(`[${msg.peerId}] ✅ wieder da`);
+      break;
+    }
     case 'peer-left':
-      removePeer(msg.peerId);
+      removePeer(msg.peerId, msg.reason === 'left' ? 'hat den Raum verlassen' : 'ist nicht zurückgekommen');
       break;
     case 'signal': {
       const peer = peers.get(msg.from);
-      const pc = peer?.pc;
-      if (!peer || !pc) return;
+      if (!peer?.pc) return;
       const { data } = msg;
+      // The phone's old connection is gone for good (page reloaded, or it couldn't be restored)
+      const pc = data.kind === 'description' && data.newConnection ? replaceConnection(peer) : peer.pc;
       log(`[${peer.id}] empfangen: ${data.kind === 'description' ? data.description.type : `ICE-Kandidat (${candidateType(data.candidate.candidate)})`}`);
       peer.enqueue(async () => {
         const reply = await applySignal(pc, data);
@@ -152,10 +195,12 @@ function createPeer(id: PeerId, pc?: RTCPeerConnection): Peer {
   spectateButton.textContent = 'Zum Zuschauer';
   spectateButton.title = 'Auto wegnehmen – für einen Fahrer, der nicht bereit werden kann und so den Start blockiert';
   actions.append(spectateButton);
-  card.root.append(actions);
+  const overlay = createConnectionOverlay();
+  card.root.append(actions, overlay.root);
   const peer: Peer = {
     id, pc, card, actions, spectateButton, color, racer, ready: false,
     enqueue: createQueue((err) => log(`❌ [${id}] ${String(err)}`)), inputSeq: 0,
+    overlay, overlayShown: false,
   };
   spectateButton.addEventListener('click', () => makeSpectator(peer));
   peers.set(id, peer);
@@ -170,8 +215,32 @@ function createPeer(id: PeerId, pc?: RTCPeerConnection): Peer {
 
 function addPeer(id: PeerId): void {
   const pc = new RTCPeerConnection(createRtcConfig(iceServers));
-  const peer = createPeer(id, pc);
+  setupConnection(createPeer(id, pc), pc);
+}
 
+/**
+ * Same player, new connection: the old one can't be restored. The car, color and role stay; the phone gets them
+ * again once the new reliable channel opens (setupReliableChannel).
+ */
+function replaceConnection(peer: Peer): RTCPeerConnection {
+  window.clearInterval(peer.pingTimer);
+  peer.pc?.close();
+  const pc = new RTCPeerConnection(createRtcConfig(iceServers));
+  peer.pc = pc;
+  // The new connection counts its inputs from the start again (a reloaded page does)
+  peer.inputSeq = 0;
+  peer.rttMs = undefined;
+  peer.path = undefined;
+  // A reloaded phone isn't ready anymore – a phone that still is says so again on the new channel
+  if (peer.ready) setReady(peer, false);
+  setupConnection(peer, pc);
+  renderPeer(peer);
+  log(`[${peer.id}] neue Verbindung`);
+  return pc;
+}
+
+function setupConnection(peer: Peer, pc: RTCPeerConnection): void {
+  const { id } = peer;
   pc.onicecandidate = ({ candidate }) => {
     if (!candidate) return;
     signaling.send({ type: 'signal', to: id, data: { kind: 'candidate', candidate: candidate.toJSON() } });
@@ -210,7 +279,10 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
       void refreshPath(peer);
     }, 1000);
   };
-  channel.onclose = () => window.clearInterval(peer.pingTimer);
+  // Not for a replaced connection: its channel may only close once the new one's ping is running
+  channel.onclose = () => {
+    if (peer.channel === channel) window.clearInterval(peer.pingTimer);
+  };
 
   channel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
@@ -224,14 +296,16 @@ function setupChannel(peer: Peer, channel: RTCDataChannel): void {
         break;
       case 'hello':
         log(`[${peer.id}] 💬 ${msg.text}`);
-        peer.card.root.classList.remove('flash');
-        void peer.card.root.offsetWidth; // restart the animation
-        peer.card.root.classList.add('flash');
+        flashCard(peer);
         break;
       case 'input':
         // Before the seq check: a late message still proves the phone is there
         window.clearTimeout(peer.inputTimeout);
-        peer.inputTimeout = window.setTimeout(() => applyInput(peer, NEUTRAL_INPUT), INPUT_TIMEOUT_MS);
+        peer.inputsStopped = false;
+        peer.inputTimeout = window.setTimeout(() => {
+          peer.inputsStopped = true;
+          applyInput(peer, NEUTRAL_INPUT);
+        }, INPUT_TIMEOUT_MS);
         if (msg.seq > peer.inputSeq) {
           peer.inputSeq = msg.seq;
           applyInput(peer, { steering: msg.steering, throttle: msg.throttle, brake: msg.brake });
@@ -358,9 +432,90 @@ async function refreshPath(peer: Peer): Promise<void> {
   renderPeer(peer);
 }
 
+function flashCard(peer: Peer): void {
+  peer.card.root.classList.remove('flash');
+  void peer.card.root.offsetWidth; // restart the animation
+  peer.card.root.classList.add('flash');
+}
+
+function createConnectionOverlay(): ConnectionOverlay {
+  const root = document.createElement('div');
+  root.className = 'connection-overlay';
+  // Read out by screen readers when it appears or its text changes
+  root.setAttribute('role', 'status');
+  root.hidden = true;
+  const title = document.createElement('strong');
+  const detail = document.createElement('p');
+  const countdownBar = document.createElement('div');
+  countdownBar.className = 'countdown-bar';
+  countdownBar.append(document.createElement('span'));
+  root.append(title, detail, countdownBar);
+  return { root, title, detail, countdownBar };
+}
+
+/**
+ * graceMs: the phone lost its server connection, the overlay counts down until its slot is freed. undefined: back
+ * again. Its car stays meanwhile – the pedals were already released by the input timeout.
+ */
+function setAway(peer: Peer, graceMs: number | undefined): void {
+  window.clearInterval(peer.awayTimer);
+  peer.awayTimer = undefined;
+  peer.awayUntil = graceMs === undefined ? undefined : performance.now() + graceMs;
+  if (graceMs !== undefined) {
+    peer.awayTimer = window.setInterval(() => renderPeer(peer), 1000);
+    // The bar runs on its own as a CSS animation; restarted for every 'peer-away'
+    const bar = peer.overlay.countdownBar.firstElementChild as HTMLElement;
+    bar.style.animation = 'none';
+    void bar.offsetWidth;
+    bar.style.animation = `countdown ${graceMs}ms linear forwards`;
+  }
+  renderPeer(peer);
+}
+
+/**
+ * Shown while the phone can't drive: away from the server and silent on WebRTC too, or the WebRTC connection broke
+ * and the phone is restoring it. Only the server gone while the inputs still arrive needs no overlay: the car still
+ * drives – the header says it.
+ */
+function renderOverlay(peer: Peer): void {
+  const { overlay } = peer;
+  const connection = peer.pc?.connectionState;
+  const away = peer.awayUntil !== undefined && (connection !== 'connected' || peer.inputsStopped === true);
+  const interrupted = connection === 'disconnected' || connection === 'failed';
+  // A new connection replacing a broken one (reloaded page): still not back until it's connected
+  const replacing = peer.overlayShown && (connection === 'new' || connection === 'connecting');
+  const shown = away || interrupted || replacing;
+
+  overlay.root.hidden = !shown;
+  overlay.countdownBar.hidden = !away;
+  if (away) {
+    const seconds = Math.max(0, Math.ceil((peer.awayUntil! - performance.now()) / 1000));
+    overlay.title.textContent = '⚠️ Verbindung verloren';
+    overlay.detail.textContent = `Platz bleibt noch ${seconds} s reserviert`;
+  } else if (interrupted) {
+    overlay.title.textContent = '⚠️ Verbindung unterbrochen';
+    overlay.detail.textContent = 'Das Handy stellt sie wieder her …';
+  } else if (replacing) {
+    overlay.title.textContent = '⚠️ Verbindung unterbrochen';
+    overlay.detail.textContent = 'Neue Verbindung wird aufgebaut …';
+  }
+  // Back again: the overlay goes away with a flash, so the change is noticed
+  if (peer.overlayShown && !shown) flashCard(peer);
+  peer.overlayShown = shown;
+}
+
+function stateText(peer: Peer): string {
+  if (!peer.pc) return 'Test-Spieler';
+  const text = CONNECTION_STATE_TEXT[peer.pc.connectionState];
+  // Only the server connection is gone (e.g. server restart): the car still drives, no overlay
+  return peer.awayUntil !== undefined && peer.overlay.root.hidden ? `${text} · ohne Server` : text;
+}
+
 function renderPeer(peer: Peer): void {
   const { state, rtt, details } = peer.card;
-  state.textContent = peer.pc?.connectionState ?? 'Test-Spieler';
+  // Overlay first: the header text depends on whether it's shown
+  renderOverlay(peer);
+  state.textContent = stateText(peer);
   details.Weg.textContent = peer.path ?? '–';
   details.Bereit.textContent = peer.racer ? (peer.ready ? 'ja' : 'nein') : '–';
   details.Lenkwert.textContent = peer.racer ? (peer.steerValue?.toFixed(2) ?? 'nA') : 'Zuschauer';
@@ -372,16 +527,18 @@ function renderPeer(peer: Peer): void {
   for (const control of peer.racerControls ?? []) control.hidden = !peer.racer;
 }
 
-function removePeer(id: PeerId): void {
+/** why: ends the log line, e.g. 'hat den Raum verlassen' */
+function removePeer(id: PeerId, why = 'hat den Raum verlassen'): void {
   const peer = peers.get(id);
   if (!peer) return;
   window.clearInterval(peer.pingTimer);
+  window.clearInterval(peer.awayTimer);
   window.clearTimeout(peer.inputTimeout);
   peer.pc?.close();
   peer.card.root.remove();
   if (peer.racer) view.removePlayer(id);
   peers.delete(id);
-  log(`[${id}] hat den Raum verlassen`);
+  log(`[${id}] ${why}`);
   // If the last one who wasn't ready leaves, everyone left is ready
   updateStartButton();
 }

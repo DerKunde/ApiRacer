@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os';
 import { WebSocket, WebSocketServer } from 'ws';
 import { HOST_ID, type ClientMessage, type IceServer, type PeerId, type ServerMessage, type SignalData } from '../src/shared/protocol';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 
 // ws 8.22 (package.json asks for at least that) has this option, @types/ws 8.18 doesn't know it yet
 declare module 'ws' {
@@ -28,6 +28,8 @@ const ROOM_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no I, O, 0, 1 (e
 // Room codes have 4 characters, peer IDs are "host" or "p<n>": anything longer is no ID. Also caps what the
 // error messages echo back ("Raum … nicht gefunden").
 const MAX_ID_LENGTH = 16;
+// Session tokens are UUIDs (36 characters)
+const MAX_SESSION_TOKEN_LENGTH = 36;
 
 // Limits against scripts. Real clients stay far below them: the join form opens a new socket for every code, and
 // after the connection setup a socket is silent.
@@ -53,8 +55,10 @@ const JOIN_TIMEOUT_MS = 10_000;
 // Time a closed socket has to answer the close frame, then the server drops it. ws waits 30 s by default: a script
 // that never answers would keep its room and its place under MAX_CONNECTIONS that long. A real browser answers at once.
 const CLOSE_TIMEOUT_MS = 2000;
-// Close codes (RFC 6455): done, nothing wrong / a client that breaks the rules
+// Close codes (RFC 6455): done, nothing wrong / page closed or left (sent by the browser) / a client that breaks the
+// rules
 const NORMAL_CLOSURE = 1000;
+const GOING_AWAY = 1001;
 const POLICY_VIOLATION = 1008;
 
 // Only the own pages may connect in production. Keeps other websites out – scripts can still fake the origin.
@@ -63,12 +67,54 @@ const TURN_URLS = process.env.TURN_URLS?.split(',');
 const TURN_SECRET = process.env.TURN_SECRET;
 const TURN_CREDENTIAL_TTL_S = 12 * 60 * 60;
 
+/**
+ * A duration in ms from the environment. A typo ('15s', empty) would otherwise become NaN, and a timer with NaN
+ * fires at once: better not to start at all.
+ */
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (raw.trim() === '' || !Number.isFinite(value) || value < 0) {
+    console.error(`${name}=${raw} ist keine Dauer in ms`);
+    process.exit(1);
+  }
+  return value;
+}
+
+// How long a phone's slot stays reserved after its connection broke (screen locked, network switch).
+// Not much longer: until then the host keeps the player, so a racer who really left blocks the start meanwhile.
+// The tests shorten it, so they don't wait 15 s for every 'peer-left'.
+const REJOIN_GRACE_MS = envMs('REJOIN_GRACE_MS', 15000);
+// Same after a close with GOING_AWAY: the browser closed the page itself (tab closed, reload, other page). A reload is
+// back within a second or two; a locked screen drops the socket without a close frame and gets the full grace.
+// Never longer than REJOIN_GRACE_MS.
+const GOING_AWAY_GRACE_MS = Math.min(REJOIN_GRACE_MS, envMs('GOING_AWAY_GRACE_MS', 5000));
+// A connection can die without a close (network switch, phone out of range): both sides keep the socket OPEN, the
+// slot is never released and the host never hears 'peer-away'. So every socket gets a ping this often (the browser
+// answers it by itself, no page code involved), and one that misses too many pongs is dropped. The tests shorten it.
+const HEARTBEAT_INTERVAL_MS = envMs('HEARTBEAT_INTERVAL_MS', 5000);
+// Pings in a row a socket may leave unanswered. A phone keeps its slot for the rejoin grace after being dropped, so
+// 5–10 s are enough. The host gets longer: dropping it ends the room for every phone, and a laptop's short Wi-Fi
+// dropout must not do that.
+const MAX_MISSED_PONGS_PHONE = 1;
+const MAX_MISSED_PONGS_HOST = 6;
+
+/** A phone in a room. */
+interface Controller {
+  /** undefined while the phone is away: the slot stays reserved for a rejoin until releaseTimer fires */
+  ws: WebSocket | undefined;
+  /** Secret the phone got with 'joined': lets it take this slot back after losing the connection. */
+  sessionToken: string;
+  releaseTimer?: NodeJS.Timeout;
+}
+
 interface Room {
   id: string;
   host: WebSocket;
   // The host socket's limits: every phone that joins adds to its bucket
   hostLimits: Limits;
-  controllers: Map<PeerId, WebSocket>;
+  controllers: Map<PeerId, Controller>;
   nextPeerNumber: number;
 }
 
@@ -88,6 +134,8 @@ interface Limits {
 
 const rooms = new Map<string, Room>();
 const memberships = new Map<WebSocket, Membership>();
+// Pings since the socket's last pong (see HEARTBEAT_INTERVAL_MS)
+const missedPongs = new WeakMap<WebSocket, number>();
 
 function send(ws: WebSocket, msg: ServerMessage): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -140,8 +188,9 @@ function lanAddresses(): string[] {
 
 // Every join that doesn't get the socket into a room counts as a wrong code. Also "Raum voll": otherwise it would
 // confirm that a code exists without using up the guesses.
-function failJoin(ws: WebSocket, limits: Limits, message: string): void {
-  send(ws, { type: 'error', message });
+// rejoin: answers a 'rejoin-room' – the phone has to tell that apart from any other error (see 'rejoin-failed').
+function failJoin(ws: WebSocket, limits: Limits, message: string, rejoin = false): void {
+  send(ws, rejoin ? { type: 'rejoin-failed', message } : { type: 'error', message });
   if (++limits.failedJoins >= MAX_FAILED_JOINS) {
     ws.close(POLICY_VIOLATION, 'Zu viele falsche Raumcodes');
     console.log(`Verbindung nach ${MAX_FAILED_JOINS} falschen Raumcodes geschlossen`);
@@ -169,16 +218,59 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
       if (!room) return failJoin(ws, limits, `Raum ${msg.roomId} nicht gefunden`);
       if (room.controllers.size >= MAX_CONTROLLERS_PER_ROOM) return failJoin(ws, limits, 'Raum voll');
       const peerId = `p${room.nextPeerNumber++}`;
+      // Unguessable (crypto RNG): whoever holds the token can claim the slot. Never logged for the same reason.
+      const sessionToken = randomUUID();
       const turn = createTurnIceServer(peerId);
       const hostBurstBefore = messageBurst(room.host);
-      room.controllers.set(peerId, ws);
+      room.controllers.set(peerId, { ws, sessionToken });
       memberships.set(ws, { room, peerId });
       // What the host's bucket grew by is available right away, not only after the refill: the host answers the new
       // phone now. messageBurst stays the one place that says how much that is.
       room.hostLimits.tokens += messageBurst(room.host) - hostBurstBefore;
-      send(ws, { type: 'joined', roomId: room.id, peerId, iceServers: turn ? [turn] : undefined });
+      send(ws, { type: 'joined', roomId: room.id, peerId, sessionToken, iceServers: turn ? [turn] : undefined });
       send(room.host, { type: 'peer-joined', peerId });
       console.log(`[${room.id}] ${peerId} beigetreten`);
+      return;
+    }
+
+    case 'rejoin-room': {
+      if (membership) return send(ws, { type: 'error', message: 'Bereits in einem Raum' });
+      const room = rooms.get(msg.roomId.trim().toUpperCase());
+      if (!room) return failJoin(ws, limits, `Raum ${msg.roomId} nicht gefunden`, true);
+      const slot = [...room.controllers].find(([, controller]) => controller.sessionToken === msg.sessionToken);
+      // Counts as a failed join too: otherwise tokens could be guessed over one connection without limit
+      if (!slot) return failJoin(ws, limits, 'Sitzung abgelaufen – bitte neu beitreten', true);
+      const [peerId, controller] = slot;
+      clearTimeout(controller.releaseTimer);
+      controller.releaseTimer = undefined;
+      // The old connection still counts as open (dead connection not noticed yet, or a duplicated tab):
+      // the newer one wins, the old one is dropped without its close counting as leaving
+      if (controller.ws) {
+        memberships.delete(controller.ws);
+        send(controller.ws, { type: 'session-taken-over' });
+        controller.ws.close();
+      }
+      controller.ws = ws;
+      memberships.set(ws, { room, peerId });
+      const turn = createTurnIceServer(peerId);
+      send(ws, { type: 'joined', roomId: room.id, peerId, sessionToken: controller.sessionToken, iceServers: turn ? [turn] : undefined });
+      send(room.host, { type: 'peer-rejoined', peerId });
+      console.log(`[${room.id}] ${peerId} wieder verbunden`);
+      return;
+    }
+
+    case 'leave-room': {
+      if (!membership) return send(ws, { type: 'error', message: 'Nicht in einem Raum' });
+      const { room, peerId } = membership;
+      // The host closes its page instead, which ends the room for every phone (handleClose)
+      if (peerId === HOST_ID) return send(ws, { type: 'error', message: 'Nur Handys können den Raum verlassen' });
+      memberships.delete(ws);
+      room.controllers.delete(peerId);
+      send(room.host, { type: 'peer-left', peerId, reason: 'left' });
+      console.log(`[${room.id}] ${peerId} hat den Raum verlassen`);
+      // Without a room the socket is of no use anymore, like after 'room-closed'. Not a member anymore, so its
+      // close is no second leave.
+      ws.close(NORMAL_CLOSURE, 'Raum verlassen');
       return;
     }
 
@@ -188,20 +280,25 @@ function handleMessage(ws: WebSocket, msg: ClientMessage, limits: Limits): void 
       // Star topology: controllers only talk to the host, the host talks to all controllers
       const target =
         peerId === HOST_ID
-          ? room.controllers.get(msg.to)
+          ? room.controllers.get(msg.to)?.ws
           : msg.to === HOST_ID
             ? room.host
             : undefined;
-      if (!target) return send(ws, { type: 'error', message: `Empfänger ${msg.to} unbekannt` });
+      // Also when the phone is away and its slot only reserved
+      if (!target) return send(ws, { type: 'error', message: `Empfänger ${msg.to} nicht erreichbar` });
       send(target, { type: 'signal', from: peerId, data: msg.data });
-      const detail = msg.data.kind === 'description' ? msg.data.description.type : 'ICE-Kandidat';
+      const detail =
+        msg.data.kind === 'description'
+          ? `${msg.data.description.type}${msg.data.newConnection ? ' (neue Verbindung)' : ''}`
+          : 'ICE-Kandidat';
       console.log(`[${room.id}] ${peerId} → ${msg.to}: ${detail}`);
       return;
     }
   }
 }
 
-function handleClose(ws: WebSocket): void {
+/** code: the close code, GOING_AWAY when the browser closed the page itself. */
+function handleClose(ws: WebSocket, code: number): void {
   const membership = memberships.get(ws);
   if (!membership) return;
   memberships.delete(ws);
@@ -209,17 +306,33 @@ function handleClose(ws: WebSocket): void {
 
   if (peerId === HOST_ID) {
     for (const controller of room.controllers.values()) {
-      send(controller, { type: 'room-closed' });
-      memberships.delete(controller);
+      clearTimeout(controller.releaseTimer);
+      if (!controller.ws) continue;
+      send(controller.ws, { type: 'room-closed' });
+      memberships.delete(controller.ws);
       // Without a room the socket is of no use anymore: the join screen opens a new one for the next code
-      controller.close(NORMAL_CLOSURE, 'Raum geschlossen');
+      controller.ws.close(NORMAL_CLOSURE, 'Raum geschlossen');
     }
     rooms.delete(room.id);
     console.log(`Raum ${room.id} geschlossen`);
   } else {
-    room.controllers.delete(peerId);
-    send(room.host, { type: 'peer-left', peerId });
-    console.log(`[${room.id}] ${peerId} gegangen`);
+    const controller = room.controllers.get(peerId);
+    if (!controller) return;
+    // Not gone yet: the phone may only have lost its connection, or its page is reloading. Its slot stays reserved
+    // for a rejoin with the session token, and the host keeps the player meanwhile.
+    const pageClosed = code === GOING_AWAY;
+    const graceMs = pageClosed ? GOING_AWAY_GRACE_MS : REJOIN_GRACE_MS;
+    controller.ws = undefined;
+    controller.releaseTimer = setTimeout(() => {
+      room.controllers.delete(peerId);
+      // A closed page that didn't come back was closed on purpose, a lost connection simply didn't come back
+      send(room.host, { type: 'peer-left', peerId, reason: pageClosed ? 'left' : 'timeout' });
+      console.log(`[${room.id}] ${peerId} nicht zurückgekommen – gegangen`);
+    }, graceMs);
+    send(room.host, { type: 'peer-away', peerId, graceMs });
+    // The close code tells why: 1001 = the browser closed the page, 1006 = connection dropped without a close frame
+    // (e.g. iOS locking the screen)
+    console.log(`[${room.id}] ${peerId} Verbindung verloren (Code ${code}), Platz bleibt ${graceMs / 1000} s reserviert`);
   }
 }
 
@@ -278,6 +391,10 @@ function isClientMessage(value: unknown): value is ClientMessage {
       return true;
     case 'join-room':
       return isId(value.roomId);
+    case 'rejoin-room':
+      return isId(value.roomId) && typeof value.sessionToken === 'string' && value.sessionToken.length <= MAX_SESSION_TOKEN_LENGTH;
+    case 'leave-room':
+      return true;
     case 'signal':
       return isId(value.to) && isSignalData(value.data);
     default:
@@ -300,6 +417,23 @@ const wss = new WebSocketServer({
   },
 });
 
+// See HEARTBEAT_INTERVAL_MS. terminate() instead of close(): a dead connection would never answer the close frame.
+// The close event follows with 1006 like for any dropped connection, so a phone's slot stays reserved.
+const heartbeat = setInterval(() => {
+  for (const ws of wss.clients) {
+    const missed = missedPongs.get(ws) ?? 0;
+    const maxMissed = memberships.get(ws)?.peerId === HOST_ID ? MAX_MISSED_PONGS_HOST : MAX_MISSED_PONGS_PHONE;
+    if (missed >= maxMissed) {
+      console.log(`Verbindung antwortet nicht mehr (${missed} Pings ohne Pong) – getrennt`);
+      ws.terminate();
+      continue;
+    }
+    missedPongs.set(ws, missed + 1);
+    ws.ping();
+  }
+}, HEARTBEAT_INTERVAL_MS);
+wss.on('close', () => clearInterval(heartbeat));
+
 let listening = false;
 // Only once the port is really open. With PORT=0 the OS picks a free one (the tests do that), printed here.
 wss.on('listening', () => {
@@ -321,6 +455,7 @@ wss.on('error', (error) => {
 
 wss.on('connection', (ws) => {
   const limits: Limits = { failedJoins: 0, tokens: MESSAGE_BURST, refilledAt: performance.now() };
+  ws.on('pong', () => missedPongs.set(ws, 0));
   const joinTimer = setTimeout(() => {
     if (!memberships.has(ws)) ws.close(NORMAL_CLOSURE, 'Keinem Raum beigetreten');
   }, JOIN_TIMEOUT_MS);
@@ -354,8 +489,8 @@ wss.on('connection', (ws) => {
     }
   });
   ws.on('error', (error) => console.error('WebSocket-Fehler:', error.message));
-  ws.on('close', () => {
+  ws.on('close', (code) => {
     clearTimeout(joinTimer);
-    handleClose(ws);
+    handleClose(ws, code);
   });
 });
