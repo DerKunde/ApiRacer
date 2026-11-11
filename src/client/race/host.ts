@@ -137,13 +137,21 @@ async function main(): Promise<void> {
 // the volume should survive closing the tab as well.
 function setupVolumeSlider(): void {
   const slider = byId<HTMLInputElement>('volume');
-  const stored = localStorage.getItem(VOLUME_STORAGE_KEY);
-  // The browser clamps the value to min … max
-  if (stored != null) slider.value = stored;
+  try {
+    const stored = localStorage.getItem(VOLUME_STORAGE_KEY);
+    // The browser clamps the value to min … max
+    if (stored != null) slider.value = stored;
+  } catch {
+    // Storage blocked (e.g. some private modes): the slider starts at its default
+  }
   view.setVolume(slider.valueAsNumber / 100);
   slider.addEventListener('input', () => {
     view.setVolume(slider.valueAsNumber / 100);
-    localStorage.setItem(VOLUME_STORAGE_KEY, slider.value);
+    try {
+      localStorage.setItem(VOLUME_STORAGE_KEY, slider.value);
+    } catch {
+      // Storage blocked or full: the volume only lasts until the page is closed
+    }
   });
 }
 
