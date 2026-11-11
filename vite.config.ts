@@ -11,6 +11,9 @@ export default defineConfig(({ mode }) => ({
   server: {
     // Listen on the LAN so the phone can open the page
     host: true,
+    // No CORS: by default Vite answers preflights from every localhost port, so a page from another local
+    // dev server could call the dev-only routes (trackFilesPlugin.ts). All pages here are same-origin
+    cors: false,
     // Saving a layout must not reload the page: the room and the test players would be lost
     watch: { ignored: ['**/src/client/race/tracks/**'] },
     // Signaling over the same host/port as the page → the phone only needs one address

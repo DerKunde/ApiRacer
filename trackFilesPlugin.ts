@@ -33,9 +33,8 @@ function parseJson(text: string): unknown {
 async function handlePut(req: IncomingMessage, res: ServerResponse, name: string): Promise<void> {
   // The dev server listens on the LAN so phones can join (vite.config.ts): they must not write into the repo
   if (!LOOPBACK.includes(req.socket.remoteAddress ?? '')) return send(res, 403);
-  // Vite answers the CORS preflight for every localhost origin on any port, so a page from another local
-  // dev server could send this request as well: only the editor's own page may write. "same-site" isn't
-  // enough, a site ignores the port
+  // Only the editor's own page may write. CORS is off (vite.config.ts), so other pages already fail the
+  // preflight: this still holds if that setting changes. "same-site" isn't enough, a site ignores the port
   if (req.headers['sec-fetch-site'] !== 'same-origin') return send(res, 403);
   if (req.headers['content-type'] !== 'application/json') return send(res, 415);
   // Node passes on exactly Content-Length bytes, so checking the header caps the body
