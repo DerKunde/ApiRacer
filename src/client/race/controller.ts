@@ -444,6 +444,9 @@ function startConnection(newConnection: boolean): void {
   reliableChannel.onopen = () => {
     log('Zuverlässiger DataChannel offen');
     reliableOpen = true;
+    // The host sends race-start right away if a race runs: a race that ended while this phone was away (no race-end
+    // reached it) must not keep it out of the lobby. The channel delivers no message before its open event.
+    raceStarted = false;
     updateReadyButton();
   };
   reliableChannel.onclose = () => {
@@ -473,6 +476,13 @@ function startConnection(newConnection: boolean): void {
         updateReadyButton();
         setConnectedStatus();
         log('🏁 Rennen gestartet');
+        break;
+      // Back in the lobby: the ready button comes back for the next race (the host resets the ready state too)
+      case 'race-end':
+        raceStarted = false;
+        updateReadyButton();
+        setConnectedStatus();
+        log('🏁 Rennen beendet – zurück in der Lobby');
         break;
     }
   };

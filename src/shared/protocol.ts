@@ -103,7 +103,10 @@ export type ChannelMessage =
   //   is open.
   // role: PC → phone, once the channel is open and whenever it changes. racer: false = spectator, no car.
   // race-start: PC → all phones when the host starts the race, and to every phone whose channel opens after that.
+  // race-end: PC → all phones when the host ends the race (also during the countdown): back to the lobby, every racer
+  //   gets ready again. A phone whose channel opens later just gets no race-start.
   | { type: 'ready'; ready: boolean; seq: number }
   | { type: 'ready-state'; ready: boolean; seq?: number }
   | { type: 'role'; racer: boolean }
-  | { type: 'race-start' };
+  | { type: 'race-start' }
+  | { type: 'race-end' };

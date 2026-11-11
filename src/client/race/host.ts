@@ -66,6 +66,8 @@ interface Peer {
   spectateButton: HTMLButtonElement;
   // Dev test players: WASD radio and ready button – only shown while the player has a car
   racerControls?: HTMLElement[];
+  // Dev test players: their ready button, which renderPeer labels from peer.ready
+  testReadyButton?: HTMLButtonElement;
   color: string;
   // false = joined when the race was full, or made a spectator by the host → connected, but no car
   racer: boolean;
@@ -96,6 +98,7 @@ interface Peer {
 const log = createLogger(byId('log'));
 const peerList = byId<HTMLUListElement>('peers');
 const startButton = byId<HTMLButtonElement>('start-btn');
+const endButton = byId<HTMLButtonElement>('end-btn');
 // Created in main() once the physics engine is loaded – before signaling, so no phone can join without it
 let view: ThreeRaceView;
 
@@ -105,6 +108,8 @@ const peers = new Map<PeerId, Peer>();
 let signaling: SignalingClient;
 let iceServers: IceServer[] | undefined;
 let phase: RacePhase = 'lobby';
+// Counts the started races: a countdown whose race was ended meanwhile stops (startRace)
+let raceRun = 0;
 
 async function main(): Promise<void> {
   await initPhysics();
@@ -342,6 +347,8 @@ function carInput(peer: Peer): DriverInput {
 // renderPeer: the lobby-only buttons on the cards go away.
 function setPhase(next: RacePhase): void {
   phase = next;
+  startButton.hidden = phase !== 'lobby';
+  endButton.hidden = phase === 'lobby';
   for (const peer of peers.values()) {
     view.updateInput(peer.id, carInput(peer));
     renderPeer(peer);
@@ -412,6 +419,7 @@ function updateStartButton(): void {
 startButton.addEventListener('click', () => void startRace());
 
 async function startRace(): Promise<void> {
+  const run = ++raceRun;
   startButton.disabled = true;
   // Spectators get it too, so every phone knows the lobby is over
   for (const peer of peers.values()) sendMessage(peer.reliableChannel, { type: 'race-start' });
@@ -423,6 +431,8 @@ async function startRace(): Promise<void> {
   for (let n = COUNTDOWN_SECONDS; n > 0; n--) {
     view.showBanner(String(n));
     await delay(1000);
+    // Ended during the countdown (endRace)
+    if (run !== raceRun) return;
   }
 
   // Released with whatever the players hold right now – flooring it during the countdown is allowed
@@ -431,7 +441,29 @@ async function startRace(): Promise<void> {
   view.showBanner('Los!');
   log('🏁 Rennen gestartet');
   await delay(GO_MESSAGE_MS);
+  if (run === raceRun) view.showBanner(undefined);
+}
+
+endButton.addEventListener('click', endRace);
+
+/**
+ * Back to the lobby, also during the countdown: every racer gets ready again for the next race. The cars stay where
+ * they are and may drive around freely until the next start puts them back on the grid.
+ */
+function endRace(): void {
+  if (phase === 'lobby') return;
+  // Stops a countdown that is still running
+  raceRun++;
   view.showBanner(undefined);
+  for (const peer of peers.values()) {
+    peer.ready = false;
+    sendMessage(peer.reliableChannel, { type: 'race-end' });
+    sendMessage(peer.reliableChannel, { type: 'ready-state', ready: false });
+  }
+  // Renders every card with the reset ready state and the lobby-only buttons
+  setPhase('lobby');
+  updateStartButton();
+  log('🏁 Rennen beendet – zurück in der Lobby');
 }
 
 function delay(ms: number): Promise<void> {
@@ -561,6 +593,7 @@ function renderPeer(peer: Peer): void {
   rtt.textContent = peer.rttMs === undefined ? '' : `${peer.rttMs.toFixed(1)} ms`;
   peer.spectateButton.hidden = !peer.racer || phase !== 'lobby';
   for (const control of peer.racerControls ?? []) control.hidden = !peer.racer;
+  if (peer.testReadyButton) peer.testReadyButton.textContent = peer.ready ? '✅ Bereit' : 'Bereit';
 }
 
 /** why: ends the log line, e.g. 'hat den Raum verlassen' */
@@ -614,14 +647,12 @@ function addTestButtons(): void {
       controlLabel.append(controlRadio, ' Steuern');
 
       const readyButton = document.createElement('button');
-      readyButton.textContent = 'Bereit';
-      readyButton.addEventListener('click', () => {
-        setReady(peer, !peer.ready);
-        readyButton.textContent = peer.ready ? '✅ Bereit' : 'Bereit';
-      });
+      readyButton.addEventListener('click', () => setReady(peer, !peer.ready));
       // In front of "Zum Zuschauer"; renderPeer hides them once the player is a spectator
       peer.actions.prepend(controlLabel, readyButton);
       peer.racerControls = [controlLabel, readyButton];
+      peer.testReadyButton = readyButton;
+      renderPeer(peer);
     }
     const removeButton = document.createElement('button');
     removeButton.textContent = 'Entfernen';
