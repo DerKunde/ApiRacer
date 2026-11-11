@@ -94,10 +94,19 @@ export type ChannelMessage =
   | { type: 'input'; seq: number; steering: number; throttle: number; brake: number }
   | { type: 'orientation'; seq: number; quaternion: [x: number, y: number, z: number, w: number]; absolute: boolean }
   | { type: 'peer-color'; color: string }
-  // Lobby, over the reliable channel: no seq needed – nothing gets lost, and the order stays as sent.
-  // ready: phone → PC, toggled by the ready button.
+  // Lobby, over the reliable channel: nothing gets lost, and the order stays as sent.
+  // ready: phone → PC, toggled by the ready button. seq numbers the phone's requests, so it can tell which one an
+  //   answer belongs to.
+  // ready-state: PC → phone, what the host has recorded – the phone shows this, not its own guess. Answers every
+  //   'ready' with its seq, also one the host ignored (spectator). Without seq when the host changes it on its own
+  //   (made a spectator, or the phone was interrupted in the lobby – it has to confirm again), and once the channel
+  //   is open.
   // role: PC → phone, once the channel is open and whenever it changes. racer: false = spectator, no car.
   // race-start: PC → all phones when the host starts the race, and to every phone whose channel opens after that.
-  | { type: 'ready'; ready: boolean }
+  // race-end: PC → all phones when the host ends the race (also during the countdown): back to the lobby, every racer
+  //   gets ready again. A phone whose channel opens later just gets no race-start.
+  | { type: 'ready'; ready: boolean; seq: number }
+  | { type: 'ready-state'; ready: boolean; seq?: number }
   | { type: 'role'; racer: boolean }
-  | { type: 'race-start' };
+  | { type: 'race-start' }
+  | { type: 'race-end' };
