@@ -48,6 +48,8 @@ const ROLLING_RESISTANCE = 0.015;
 const REVERSE_BELOW_SPEED = 1;
 // Air resistance F = coefficient × v². Together with the drive force this gives a top speed of about 24 m/s.
 const DRAG_COEFFICIENT = 6;
+// Where the drive force of both rear wheels equals the air drag (rolling resistance left out), in m/s
+export const TOP_SPEED = Math.sqrt(2 * DRIVE_FORCE / DRAG_COEFFICIENT);
 
 // Temporary, to see the physics at work: cars are dropped tilted from above their start position
 const DROP_HEIGHT = 3;
@@ -71,6 +73,7 @@ export class CarPhysics {
     private readonly normal = new THREE.Vector3();
     private readonly wheelForward = new THREE.Vector3();
     private readonly wheelSide = new THREE.Vector3();
+    private readonly carForward = new THREE.Vector3();
     private readonly rotation = new THREE.Quaternion();
     private readonly ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: -1, z: 0 });
 
@@ -186,6 +189,13 @@ export class CarPhysics {
         // Brake and rolling resistance only slow the car down: capped so they stop it, but can't push it backwards
         const resistance = (reversing ? 0 : brake * BRAKE_FORCE) + ROLLING_RESISTANCE * load;
         return drive - Math.sign(forwardSpeed) * Math.min(resistance, Math.abs(forwardSpeed) * stoppingForce);
+    }
+
+    // In m/s, negative when reversing. Only along the car: sliding sideways doesn't turn the wheels, so it doesn't
+    // count for the engine either.
+    get forwardSpeed(): number {
+        this.carForward.set(0, 0, -1).applyQuaternion(this.rotation.copy(this.body.rotation()));
+        return this.carForward.dot(this.body.linvel());
     }
 
     copyPoseTo(target: THREE.Object3D): void {
