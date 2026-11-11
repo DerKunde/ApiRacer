@@ -1,6 +1,6 @@
 import type { PeerId } from '../../shared/protocol';
 import type { Quaternion } from '../common/mobileDeviceSensors';
-import { rendererPixelRatio } from '../common/pixelRatio';
+import { onPixelRatioChange, sizeRenderer } from '../common/pixelRatio';
 import type { OrientationView } from './orientationView';
 import * as THREE from 'three';
 
@@ -23,8 +23,7 @@ export class ThreeOrientationView implements OrientationView {
         this.camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
         this.renderer = new THREE.WebGLRenderer();
 
-        this.renderer.setPixelRatio(rendererPixelRatio());
-        this.renderer.setSize(container.clientWidth, container.clientHeight);
+        sizeRenderer(this.renderer, container.clientWidth, container.clientHeight);
         container.append(this.renderer.domElement);
 
         // Surface color like the peer cards, so the framed view stands out from the page background
@@ -44,6 +43,7 @@ export class ThreeOrientationView implements OrientationView {
         this.fitCameraToPhones();
 
         new ResizeObserver(() => this.resize(container)).observe(container);
+        onPixelRatioChange(() => this.resize(container));
 
         this.renderer.setAnimationLoop(() => this.render());
     }
@@ -151,15 +151,15 @@ export class ThreeOrientationView implements OrientationView {
         materials.forEach((material) => material.dispose());
     }
 
-    // Called by the ResizeObserver whenever the container changes size (window resize, fullscreen, beamer, zoom)
+    // Called by the ResizeObserver whenever the container changes size (window resize, fullscreen, zoom), and when
+    // the pixel ratio changes (zoom, moving the window to a beamer or another screen)
     private resize(container: HTMLElement): void {
         const width = container.clientWidth;
         const height = container.clientHeight;
         // Hidden container (0 × 0) would make the aspect NaN (0 / 0)
         if (width === 0 || height === 0) return;
 
-        this.renderer.setPixelRatio(rendererPixelRatio());
-        this.renderer.setSize(width, height);
+        sizeRenderer(this.renderer, width, height);
         this.camera.aspect = width / height;
         // three.js caches the projection matrix. Changing 'aspect' alone has no effect until it's rebuilt
         this.camera.updateProjectionMatrix();
