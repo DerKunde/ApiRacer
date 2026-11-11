@@ -179,6 +179,11 @@ export class ThreeRaceView implements RaceView {
         this.banner.hidden = text === undefined;
     }
 
+    // Of the engine sound, 0 … 1: the volume slider on the host page
+    setVolume(volume: number): void {
+        this.audio.setVolume(volume);
+    }
+
     // overlay: whatever the editor wants to show on the map, shown until stopEditing
     startEditing(overlay: THREE.Object3D): void {
         this.editing = true;

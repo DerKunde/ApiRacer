@@ -47,7 +47,7 @@ export function viewportPan(viewport: Viewport): number {
     return (viewport.x + viewport.width / 2 - 0.5) * 2 * STEREO_WIDTH;
 }
 
-// All engines → mix (scaled with the engine count) → master (silent in edit mode) → compressor → speakers
+// All engines → mix (scaled with the engine count) → master (volume slider, silent in edit mode) → compressor → speakers
 export class RaceAudio {
 
     private readonly context = new AudioContext();
@@ -58,6 +58,9 @@ export class RaceAudio {
     private engineCount = 0;
     // Browsers only start audio after a click or key press on the page. Set once that has happened.
     private unlocked = false;
+    // 0 … 1, set by the volume slider on the host page
+    private volume = 1;
+    private silent = false;
 
     constructor() {
         const { context } = this;
@@ -102,9 +105,27 @@ export class RaceAudio {
         this.updateMixVolume();
     }
 
+    // volume: 0 … 1 (slider position)
+    setVolume(volume: number): void {
+        this.volume = Math.min(Math.max(volume, 0), 1);
+        this.updateMasterVolume();
+    }
+
     // Edit mode: the cars are hidden and stand still
     setSilent(silent: boolean): void {
-        this.master.gain.setTargetAtTime(silent ? 0 : MASTER_VOLUME, this.context.currentTime, SMOOTHING);
+        this.silent = silent;
+        this.updateMasterVolume();
+    }
+
+    // Squared: we hear loudness roughly logarithmically – with a linear gain, the upper half of the slider would
+    // barely change anything
+    private updateMasterVolume(): void {
+        const target = this.silent ? 0 : MASTER_VOLUME * this.volume ** 2;
+        const now = this.context.currentTime;
+        // A dragged slider sends dozens of values per second. Without cancelling, a suspended context (frozen clock)
+        // would pile them all up at the same time.
+        this.master.gain.cancelScheduledValues(now);
+        this.master.gain.setTargetAtTime(target, now, SMOOTHING);
     }
 
     // Engines don't add up in phase, so their loudness grows with √n, not n: dividing by √n keeps the mix of four

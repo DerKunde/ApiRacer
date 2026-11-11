@@ -30,6 +30,8 @@ const GO_MESSAGE_MS = 1000;
 // or the car keeps driving with the last input until the DataChannel finally closes.
 const INPUT_TIMEOUT_MS = 500;
 const NEUTRAL_INPUT: DriverInput = { steering: 0, throttle: 0, brake: 0 };
+// Slider position of the engine volume (0 … 100), kept across reloads
+const VOLUME_STORAGE_KEY = 'apiracer.volume';
 // Header of the peer card: the WebRTC connection state. When it breaks, the overlay over the card explains more.
 const CONNECTION_STATE_TEXT: Record<RTCPeerConnectionState, string> = {
   new: 'verbindet …',
@@ -114,6 +116,7 @@ let raceRun = 0;
 async function main(): Promise<void> {
   await initPhysics();
   view = new ThreeRaceView(byId('race-view'));
+  setupVolumeSlider();
   // Dynamic import behind the DEV check: this is what keeps the editor out of the production build
   if (import.meta.env.DEV) {
     const { addTrackEditor } = await import('./trackEditor');
@@ -128,6 +131,20 @@ async function main(): Promise<void> {
     log('⚠️ Verbindung zum Signaling-Server verloren (bestehende WebRTC-Verbindungen laufen weiter)'),
   );
   signaling.send({ type: 'create-room' });
+}
+
+// Engine volume next to the start button. localStorage instead of sessionStorage: the PC usually stays the same, so
+// the volume should survive closing the tab as well.
+function setupVolumeSlider(): void {
+  const slider = byId<HTMLInputElement>('volume');
+  const stored = localStorage.getItem(VOLUME_STORAGE_KEY);
+  // The browser clamps the value to min … max
+  if (stored != null) slider.value = stored;
+  view.setVolume(slider.valueAsNumber / 100);
+  slider.addEventListener('input', () => {
+    view.setVolume(slider.valueAsNumber / 100);
+    localStorage.setItem(VOLUME_STORAGE_KEY, slider.value);
+  });
 }
 
 function handleServerMessage(msg: ServerMessage): void {

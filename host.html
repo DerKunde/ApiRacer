@@ -23,6 +23,8 @@
           <button type="button" id="start-btn" disabled>Rennen starten</button>
           <button type="button" id="end-btn" hidden>Rennen beenden</button>
           <span id="ready-count">Warte auf Fahrer …</span>
+          <!-- Engine sound, applied and remembered by setupVolumeSlider in host.ts -->
+          <label class="race-volume">Lautstärke <input type="range" id="volume" min="0" max="100" value="100" /></label>
         </p>
         <div id="race-view"></div>
       </section>
