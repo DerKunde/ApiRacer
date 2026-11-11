@@ -185,21 +185,6 @@ a {
   border-radius: 10px;
 }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--surface);
-  border: 1px solid var(--border);
-}
-
-th,
-td {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  text-align: left;
-}
-
-tr.flash,
 .peer-card.flash {
   animation: flash 1s ease-out;
 }

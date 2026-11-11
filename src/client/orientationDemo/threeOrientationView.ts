@@ -1,5 +1,6 @@
 import type { PeerId } from '../../shared/protocol';
 import type { Quaternion } from '../common/mobileDeviceSensors';
+import { rendererPixelRatio } from '../common/pixelRatio';
 import type { OrientationView } from './orientationView';
 import * as THREE from 'three';
 
@@ -22,6 +23,7 @@ export class ThreeOrientationView implements OrientationView {
         this.camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
         this.renderer = new THREE.WebGLRenderer();
 
+        this.renderer.setPixelRatio(rendererPixelRatio());
         this.renderer.setSize(container.clientWidth, container.clientHeight);
         container.append(this.renderer.domElement);
 
@@ -156,6 +158,7 @@ export class ThreeOrientationView implements OrientationView {
         // Hidden container (0 × 0) would make the aspect NaN (0 / 0)
         if (width === 0 || height === 0) return;
 
+        this.renderer.setPixelRatio(rendererPixelRatio());
         this.renderer.setSize(width, height);
         this.camera.aspect = width / height;
         // three.js caches the projection matrix. Changing 'aspect' alone has no effect until it's rebuilt

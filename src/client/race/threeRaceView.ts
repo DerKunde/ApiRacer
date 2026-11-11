@@ -1,5 +1,6 @@
 import type { PeerId } from '../../shared/protocol';
 import type { TrackLayout } from '../../shared/trackLayout';
+import { rendererPixelRatio } from '../common/pixelRatio';
 import { MAX_WHEEL_ANGLE, WHEEL_POSITIONS, type CarPhysics } from './carPhysics';
 import { CAR_DESIGNS, createCarModel } from './carModel';
 import { RacePhysics } from './racePhysics';
@@ -75,6 +76,7 @@ export class ThreeRaceView implements RaceView {
     private readonly editCamera = new THREE.OrthographicCamera();
 
     constructor(container: HTMLElement) {
+        this.renderer.setPixelRatio(rendererPixelRatio());
         this.renderer.setSize(container.clientWidth, container.clientHeight);
         this.renderer.getSize(this.size);
         // Without the scissor test, every render() would clear the WHOLE canvas, not only its viewport
@@ -354,6 +356,7 @@ export class ThreeRaceView implements RaceView {
         const width = container.clientWidth;
         const height = container.clientHeight;
         if (width === 0 || height === 0) return;
+        this.renderer.setPixelRatio(rendererPixelRatio());
         this.renderer.setSize(width, height);
         // metersPerPixel and the editor's resize handling read it before the next frame
         this.renderer.getSize(this.size);
