@@ -237,9 +237,11 @@ function replaceConnection(peer: Peer): RTCPeerConnection {
   peer.inputSeq = 0;
   peer.rttMs = undefined;
   peer.path = undefined;
-  // The old connection is gone: interrupted until the first input arrives over the new one
+  // The old connection is gone: interrupted until the first input arrives over the new one. Its input timeout would
+  // have released the pedals – it's cancelled here, so release them now, or the car keeps driving with the last input.
   window.clearTimeout(peer.inputTimeout);
   peer.inputsStopped = true;
+  applyInput(peer, NEUTRAL_INPUT);
   setInterrupted(peer, true);
   setupConnection(peer, pc);
   renderPeer(peer);
