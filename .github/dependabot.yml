@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Opens a PR that moves the pinned SHA and its version comment in the workflows to the newest release
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # A hijacked release is usually found and pulled within days, so new releases wait a week before a PR
+    cooldown:
+      default-days: 7
+    # One PR for all actions instead of one each
+    groups:
+      actions:
+        patterns:
+          - '*'
