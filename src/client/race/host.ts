@@ -373,18 +373,27 @@ function setupReliableChannel(peer: Peer, channel: RTCDataChannel): void {
   channel.onmessage = (e) => {
     const msg = JSON.parse(e.data as string) as ChannelMessage;
     if (msg.type !== 'ready') return;
-    // Only racers count for the start – e.g. a message sent just before the host made the phone a spectator
-    if (peer.racer) setReady(peer, msg.ready);
-    // Answered either way: until the answer arrives, the phone shows the request as on its way
-    sendMessage(channel, { type: 'ready-state', ready: peer.ready, seq: msg.seq });
+    // Only racers count for the start – e.g. a message sent just before the host made the phone a spectator.
+    // Answered either way: until the answer arrives, the phone shows the request as on its way.
+    if (peer.racer) setReady(peer, msg.ready, msg.seq);
+    else sendReadyState(peer, msg.seq);
   };
 }
 
-function setReady(peer: Peer, ready: boolean): void {
+/**
+ * Every change of the ready state goes through here, so the phone always learns it – it shows only what the host has
+ * recorded. seq: the phone's request this answers; without it, the host changed it on its own.
+ */
+function setReady(peer: Peer, ready: boolean, seq?: number): void {
   peer.ready = ready;
   log(`[${peer.id}] ${ready ? 'bereit' : 'nicht mehr bereit'}`);
+  sendReadyState(peer, seq);
   renderPeer(peer);
   updateStartButton();
+}
+
+function sendReadyState(peer: Peer, seq?: number): void {
+  sendMessage(peer.reliableChannel, { type: 'ready-state', ready: peer.ready, seq });
 }
 
 /**
@@ -394,10 +403,9 @@ function setReady(peer: Peer, ready: boolean): void {
 function makeSpectator(peer: Peer): void {
   if (!peer.racer || phase !== 'lobby') return;
   peer.racer = false;
-  peer.ready = false;
   view.removePlayer(peer.id);
   sendMessage(peer.reliableChannel, { type: 'role', racer: false });
-  sendMessage(peer.reliableChannel, { type: 'ready-state', ready: false });
+  if (peer.ready) setReady(peer, false);
   log(`[${peer.id}] ist jetzt Zuschauer`);
   renderPeer(peer);
   // Maybe the last one who wasn't ready → the start unlocks
@@ -458,9 +466,9 @@ function endRace(): void {
   raceRun++;
   view.showBanner(undefined);
   for (const peer of peers.values()) {
-    peer.ready = false;
+    // Before race-end: the phone shows its ready button again with it, and the button must not show the old state
+    if (peer.ready) setReady(peer, false);
     sendMessage(peer.reliableChannel, { type: 'race-end' });
-    sendMessage(peer.reliableChannel, { type: 'ready-state', ready: false });
   }
   // Renders every card with the reset ready state and the lobby-only buttons
   setPhase('lobby');
@@ -542,10 +550,9 @@ function setInterrupted(peer: Peer, interrupted: boolean): void {
     // Lobby only: once the race runs, the ready state doesn't count anymore
     if (peer.ready && phase === 'lobby') {
       log(`[${peer.id}] Verbindung unterbrochen – muss sich erneut bereit melden`);
-      setReady(peer, false);
       // A broken path: the reliable channel delivers it once the path works again. A replaced connection: its new
       // channel sends the ready state when it opens (setupReliableChannel).
-      sendMessage(peer.reliableChannel, { type: 'ready-state', ready: false });
+      setReady(peer, false);
     }
   } else {
     // Back again: the card flashes, so the change is noticed
