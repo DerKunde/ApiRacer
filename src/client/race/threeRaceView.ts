@@ -1,5 +1,6 @@
 import type { PeerId } from '../../shared/protocol';
 import type { TrackLayout } from '../../shared/trackLayout';
+import { onPixelRatioChange, sizeRenderer } from '../common/pixelRatio';
 import { MAX_WHEEL_ANGLE, WHEEL_POSITIONS, type CarPhysics } from './carPhysics';
 import { CAR_DESIGNS, createCarModel } from './carModel';
 import { RacePhysics } from './racePhysics';
@@ -75,7 +76,7 @@ export class ThreeRaceView implements RaceView {
     private readonly editCamera = new THREE.OrthographicCamera();
 
     constructor(container: HTMLElement) {
-        this.renderer.setSize(container.clientWidth, container.clientHeight);
+        sizeRenderer(this.renderer, container.clientWidth, container.clientHeight);
         this.renderer.getSize(this.size);
         // Without the scissor test, every render() would clear the WHOLE canvas, not only its viewport
         this.renderer.setScissorTest(true);
@@ -111,6 +112,7 @@ export class ThreeRaceView implements RaceView {
         this.editCamera.far = EDIT_CAMERA_HEIGHT * 2;
 
         new ResizeObserver(() => this.resize(container)).observe(container);
+        onPixelRatioChange(() => this.resize(container));
         this.renderer.setAnimationLoop((time) => this.render(time));
     }
 
@@ -349,12 +351,12 @@ export class ThreeRaceView implements RaceView {
         materials.forEach((material) => material.dispose());
     }
 
-    // Called by the ResizeObserver; the camera aspects are updated per view in renderView
+    // Called by the ResizeObserver and on pixel ratio changes; the camera aspects are updated per view in renderView
     private resize(container: HTMLElement): void {
         const width = container.clientWidth;
         const height = container.clientHeight;
         if (width === 0 || height === 0) return;
-        this.renderer.setSize(width, height);
+        sizeRenderer(this.renderer, width, height);
         // metersPerPixel and the editor's resize handling read it before the next frame
         this.renderer.getSize(this.size);
     }
