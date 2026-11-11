@@ -120,12 +120,6 @@ npm test
 
 Runs the tests with [Vitest](https://vitest.dev/). The signaling server tests start the real `server.ts` on a free port and talk to it over WebSocket, like the pages do. GitHub Actions runs typecheck, build and tests on every pull request ([ci.yml](.github/workflows/ci.yml)). A deploy runs them first and ships the pages built there, so what goes live is what was checked.
 
-```bash
-npm run test:browser
-```
-
-Runs the host and several phones as headless Chrome tabs ([run.mjs](tests/browser/run.mjs)) and checks reconnecting (ICE restart, new connection, reload, taken-over session, expired slot, server restart), the ready confirmation and ending the race. It takes about 3 minutes and needs Google Chrome (`CHROME_PATH` if it isn't found). Not part of CI yet.
-
 ### Pages
 
 | Page                          | Device | Purpose                                                    |
